@@ -1,0 +1,10 @@
+google-cloud-aiplatform[agent_engines]>=1.126.1
+google-adk>=1.18.0
+google-cloud-bigquery>=3.46.0
+google-cloud-bigquery-storage>=2.42.0
+google-cloud-secret-manager>=2.31.0
+google-cloud-storage>=3.16.0
+pyarrow>=25.0.0
+PyGithub>=2.10.0
+requests>=2.32.0
+pydantic>=2.10.0

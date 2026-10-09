@@ -1,0 +1,5 @@
+bigquery_agent_analytics:
+  project_id: experthub-510907
+  dataset_id: agent_telemetry
+  table_id: agent_events
+  dataset_location: US

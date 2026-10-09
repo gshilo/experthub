@@ -1,0 +1,15 @@
+# Example Terraform variable configuration for Experthub demo
+project_id                     = "your-gcp-project-id"
+region                         = "us-central1"
+bq_location                    = "US"
+secret_name                    = "github-pat"
+github_pat                     = "" # Set your GitHub Personal Access Token or leave empty for placeholder
+use_existing_service_account   = true
+existing_service_account_email = "YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+artifact_repository_id         = "cloud-run-source-deploy"
+frontend_service_name          = "experthub-frontend"
+customer_service_agent_id      = "" # Populate if already deployed or leave blank
+customer_agent_id              = "" # Populate if already deployed or leave blank
+auditor_agent_id               = "" # Populate if already deployed or leave blank
+build_frontend_image           = true # Set true to automatically build image with Cloud Build
+deploy_vertex_agents           = true # Set true to automatically run agent deploy scripts

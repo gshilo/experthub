@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+*.log
+customer_service_agent_tmp*/
+customer_agent_tmp*/
+auditor_agent_tmp*/
+terraform/

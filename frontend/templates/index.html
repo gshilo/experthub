@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Self-Improving Agent Feedback Loop | ApexHome & Electro</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-tertiary: #334155;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-purple: #8b5cf6;
+      --accent-rose: #f43f5e;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: #334155;
+      --card-bg: #1e293b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: white;
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .brand-subtitle {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .badges {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 9999px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+    }
+
+    .badge-active {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+
+    /* Tabs */
+    .tabs-nav {
+      display: flex;
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      gap: 1.5rem;
+    }
+
+    .tab-button {
+      background: none;
+      border: none;
+      padding: 0.85rem 0.25rem;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+    }
+
+    .tab-button:hover { color: var(--text-main); }
+    .tab-button.active {
+      color: #60a5fa;
+      font-weight: 600;
+    }
+
+    .tab-button.active::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background-color: #60a5fa;
+    }
+
+    main {
+      flex: 1;
+      padding: 1.5rem 2rem;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Layout */
+    .grid-2col {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 1.5rem;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .card-title {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 0.55rem 1.1rem;
+      border-radius: 8px;
+      font-weight: 500;
+      font-size: 0.875rem;
+      cursor: pointer;
+      border: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-purple { background: var(--accent-purple); color: white; }
+    .btn-purple:hover { background: #7c3aed; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-main);
+    }
+    .btn-outline:hover { background: rgba(255, 255, 255, 0.05); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-group {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    /* Persona card */
+    .persona-box {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1rem;
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.85rem;
+    }
+
+    .persona-item strong { color: #94a3b8; }
+    .persona-item span { color: #f1f5f9; font-weight: 500; margin-left: 0.35rem; }
+
+    /* Chat stream */
+    .chat-box {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      height: 420px;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      font-size: 0.9rem;
+    }
+
+    .chat-message {
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      max-width: 85%;
+      line-height: 1.45;
+      animation: messageAppear 0.25s ease-out;
+    }
+
+    .chat-customer {
+      align-self: flex-start;
+      background: #1e293b;
+      border-left: 3px solid #3b82f6;
+    }
+
+    .chat-service {
+      align-self: flex-end;
+      background: #1e3a5f;
+      border-right: 3px solid #10b981;
+    }
+
+    .chat-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .chat-customer .chat-label { color: #60a5fa; }
+    .chat-service .chat-label { color: #34d399; }
+    .chat-meta { font-weight: normal; font-size: 0.7rem; color: #94a3b8; }
+
+    /* Typing indicator */
+    .typing-indicator {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 140px;
+    }
+
+    .typing-dots {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 0;
+    }
+
+    .typing-dots span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+      animation: bounceDots 1.4s infinite ease-in-out both;
+    }
+
+    .chat-customer .typing-dots span { background-color: #60a5fa; }
+    .chat-service .typing-dots span { background-color: #34d399; }
+
+    .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+    .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0s; }
+
+    @keyframes bounceDots {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.35; }
+      40% { transform: scale(1.15); opacity: 1; }
+    }
+
+    @keyframes messageAppear {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .select-pacing {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: #f1f5f9;
+      padding: 0.45rem 0.65rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+
+    .select-pacing:focus {
+      border-color: #3b82f6;
+    }
+
+    /* Rating card */
+    .rating-banner {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.03));
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+    }
+
+    .stars {
+      color: #fbbf24;
+      font-size: 1.4rem;
+      letter-spacing: 2px;
+    }
+
+    .rating-text {
+      flex: 1;
+      font-size: 0.875rem;
+    }
+
+    /* Auditor Section */
+    .auditor-box {
+      font-size: 0.875rem;
+    }
+
+    .okf-viewer {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: #cbd5e1;
+      max-height: 280px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-top: 0.75rem;
+    }
+
+    /* Analytics Dashboard */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .kpi-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.15rem;
+      text-align: center;
+    }
+
+    .kpi-val {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #60a5fa;
+      margin-top: 0.25rem;
+    }
+
+    .kpi-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+    }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+    }
+
+    .chart-container {
+      position: relative;
+      height: 260px;
+      width: 100%;
+    }
+
+    /* Status pulse */
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #64748b;
+    }
+    .dot-live {
+      background-color: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <div class="brand-title">ApexHome & Electro</div>
+        <div class="brand-subtitle">Self-Improving Agent Feedback Loop Demo</div>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge">Project: <strong style="color: #60a5fa;">experthub-510907</strong></span>
+      <span class="badge">Model: <strong>gemini-3.8-flash</strong></span>
+      <span class="badge">Framework: <strong>ADK 2.0</strong></span>
+      <span class="badge badge-active" id="system-status-badge">● Systems Active</span>
+    </div>
+  </header>
+
+  <nav class="tabs-nav">
+    <button class="tab-button active" onclick="switchTab('tab-conversation')">Live Conversation & Auditor Workspace</button>
+    <button class="tab-button" onclick="switchTab('tab-analytics')">Auditor & Telemetry Analytics Dashboard</button>
+  </nav>
+
+  <main>
+    <!-- TAB 1: Live Conversation & Auditor Workspace -->
+    <div id="tab-conversation" class="tab-content active">
+      <div class="grid-2col">
+        <!-- Left: Live Conversation -->
+        <div>
+          <div class="card">
+            <div class="card-title">
+              <span>Customer Support Simulation</span>
+              <div class="status-indicator">
+                <span class="dot" id="live-dot"></span>
+                <span id="live-status-text">Idle</span>
+              </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="btn-group" style="margin-bottom: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem;">
+              <div style="display: flex; gap: 0.75rem;">
+                <button class="btn btn-primary" id="btn-start" onclick="startConversation()">
+                  ▶ Start conversation
+                </button>
+                <button class="btn btn-danger" id="btn-end" onclick="endConversation()" disabled>
+                  ⏹ End conversation
+                </button>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <label for="chat-pacing" style="font-size: 0.8rem; color: #94a3b8; font-weight: 500;">Pacing:</label>
+                <select id="chat-pacing" class="select-pacing">
+                  <option value="human" selected>Realistic Human (~5–7s/turn)</option>
+                  <option value="relaxed">Relaxed Human (~7–10s/turn)</option>
+                  <option value="fast">Fast / Demo (~2s/turn)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Persona details -->
+            <div class="persona-box" id="persona-summary" style="display: none;">
+              <div class="persona-item"><strong>Customer:</strong> <span id="p-name">-</span></div>
+              <div class="persona-item"><strong>Product:</strong> <span id="p-product">-</span></div>
+              <div class="persona-item"><strong>Patience:</strong> <span id="p-patience">-</span></div>
+            </div>
+
+            <!-- Live chat stream -->
+            <div class="chat-box" id="chat-stream">
+              <div style="color: #64748b; text-align: center; margin: auto; font-style: italic;">
+                Click "Start conversation" to initiate a realistic human chat simulation.
+              </div>
+            </div>
+
+            <!-- Rating result -->
+            <div class="rating-banner" id="rating-box" style="display: none;">
+              <div class="stars" id="rating-stars">★★★★★</div>
+              <div class="rating-text">
+                <div style="font-weight: 600; color: #fbbf24; margin-bottom: 0.2rem;" id="rating-title">Customer Feedback Persisted to BigQuery</div>
+                <div id="rating-desc" style="color: #cbd5e1;">-</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Auditor Agent Section -->
+        <div>
+          <div class="card">
+            <div class="card-title">
+              <span>Auditor Agent & Self-Improving Loop</span>
+              <span class="badge" style="background: rgba(139, 92, 246, 0.15); color: #c084fc;">Multi-Agent Pipeline</span>
+            </div>
+            <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 1rem; line-height: 1.4;">
+              Audits interaction telemetry in BigQuery, designs token optimizations, and commits refined Open Knowledge Format (OKF v0.2) rules directly to GitHub.
+            </p>
+            <button class="btn btn-purple" id="btn-auditor" onclick="runAuditorAgent()">
+              🔍 Run Auditor Agent
+            </button>
+
+            <div class="auditor-box" id="auditor-results" style="margin-top: 1.25rem; display: none;">
+              <div style="font-size: 0.85rem; font-weight: 600; color: #a78bfa; margin-bottom: 0.4rem;">
+                Detected Issues & Bottlenecks:
+              </div>
+              <ul id="auditor-issues-list" style="padding-left: 1.2rem; color: #cbd5e1; font-size: 0.825rem; margin-bottom: 0.75rem;"></ul>
+
+              <div style="font-size: 0.85rem; font-weight: 600; color: #34d399; margin-bottom: 0.4rem;">
+                Token Optimization & Commits:
+              </div>
+              <div id="auditor-stats" style="font-size: 0.825rem; color: #94a3b8; margin-bottom: 0.5rem;"></div>
+
+              <div style="font-size: 0.85rem; font-weight: 600; color: #60a5fa; margin-bottom: 0.3rem;">
+                Generated OKF Rule (Committed to dynamic_context.md):
+              </div>
+              <pre class="okf-viewer" id="auditor-okf-text"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: Visualization & Analytics Dashboard -->
+    <div id="tab-analytics" class="tab-content">
+      <div class="card">
+        <div class="card-title">
+          <span>BigQuery Analytics & System Telemetry</span>
+          <div style="display: flex; gap: 0.75rem; align-items: center;">
+            <label style="font-size: 0.8rem; color: #94a3b8; display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
+              <input type="checkbox" id="auto-refresh-toggle" checked> Auto-refresh (15s)
+            </label>
+            <button class="btn btn-outline" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="loadAnalyticsData()">
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+
+        <!-- KPI summary -->
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Total Sessions</div>
+            <div class="kpi-val" id="kpi-sessions">-</div>
+            <div class="kpi-sub">Simulated turns logged</div>
+          </div>
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Avg Customer Rating</div>
+            <div class="kpi-val" id="kpi-rating" style="color: #fbbf24;">-</div>
+            <div class="kpi-sub">demo.customer_ratings</div>
+          </div>
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Avg Turn Latency</div>
+            <div class="kpi-val" id="kpi-latency" style="color: #34d399;">-</div>
+            <div class="kpi-sub">Agent Analytics Plugin</div>
+          </div>
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Token Optimization</div>
+            <div class="kpi-val" id="kpi-savings" style="color: #c084fc;">-28%</div>
+            <div class="kpi-sub">OKF rules compression</div>
+          </div>
+        </div>
+
+        <!-- 4 Chart.js charts -->
+        <div class="charts-grid">
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-title" style="font-size: 0.875rem;">Customer Satisfaction (CSAT) Distribution</div>
+            <div class="chart-container">
+              <canvas id="chart-ratings"></canvas>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-title" style="font-size: 0.875rem;">Response Latency Over Time (Avg vs. p95)</div>
+            <div class="chart-container">
+              <canvas id="chart-latency"></canvas>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-title" style="font-size: 0.875rem;">Token Consumption (Input vs. Output Tokens)</div>
+            <div class="chart-container">
+              <canvas id="chart-tokens"></canvas>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-title" style="font-size: 0.875rem;">Customer Service Tool Usage Breakdown</div>
+            <div class="chart-container">
+              <canvas id="chart-tools"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // Tab switching
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+      if (tabId === 'tab-analytics') {
+        loadAnalyticsData();
+      }
+    }
+
+    let activeSessionId = null;
+    let eventSource = null;
+
+    // Start Live Conversation Simulation
+    async function startConversation() {
+      const btnStart = document.getElementById('btn-start');
+      const btnEnd = document.getElementById('btn-end');
+      const liveDot = document.getElementById('live-dot');
+      const liveStatus = document.getElementById('live-status-text');
+      const chatBox = document.getElementById('chat-stream');
+      const ratingBox = document.getElementById('rating-box');
+      const personaBox = document.getElementById('persona-summary');
+
+      btnStart.disabled = true;
+      btnEnd.disabled = false;
+      liveDot.className = 'dot dot-live';
+      liveStatus.innerText = 'Initiating session...';
+      chatBox.innerHTML = '';
+      ratingBox.style.display = 'none';
+
+      try {
+        const pacingEl = document.getElementById('chat-pacing');
+        const pacing = pacingEl ? pacingEl.value : 'human';
+        const res = await fetch('/api/conversation/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pacing: pacing })
+        });
+        const data = await res.json();
+        activeSessionId = data.session_id;
+
+        // Render persona
+        document.getElementById('p-name').innerText = data.persona.customer_name;
+        document.getElementById('p-product').innerText = data.persona.product;
+        document.getElementById('p-patience').innerText = data.persona.patience;
+        personaBox.style.display = 'flex';
+
+        // Connect SSE stream
+        connectStream(activeSessionId);
+      } catch (err) {
+        liveStatus.innerText = 'Failed to start';
+        btnStart.disabled = false;
+        btnEnd.disabled = true;
+        liveDot.className = 'dot';
+        console.error(err);
+      }
+    }
+
+    let pollInterval = null;
+    const renderedEvents = new Set();
+
+    function showTypingIndicator(sender, name, statusText) {
+      removeTypingIndicator();
+      const chatBox = document.getElementById('chat-stream');
+      const liveStatus = document.getElementById('live-status-text');
+      if (statusText) {
+        liveStatus.innerText = statusText;
+      }
+
+      const isCustomer = (sender === 'customer');
+      const msg = document.createElement('div');
+      msg.id = 'active-typing-indicator';
+      msg.className = `chat-message ${isCustomer ? 'chat-customer' : 'chat-service'} typing-indicator`;
+      msg.innerHTML = `
+        <div class="chat-label">
+          <span>${isCustomer ? 'Customer' : 'Customer service'}: <strong>${name}</strong></span>
+          <span class="chat-meta">typing...</span>
+        </div>
+        <div class="typing-dots">
+          <span></span><span></span><span></span>
+        </div>
+      `;
+      chatBox.appendChild(msg);
+      chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });
+    }
+
+    function removeTypingIndicator() {
+      const el = document.getElementById('active-typing-indicator');
+      if (el) {
+        el.remove();
+      }
+    }
+
+    function connectStream(sessionId) {
+      const chatBox = document.getElementById('chat-stream');
+      const liveStatus = document.getElementById('live-status-text');
+      const btnStart = document.getElementById('btn-start');
+      const btnEnd = document.getElementById('btn-end');
+      const liveDot = document.getElementById('live-dot');
+
+      // Reset tracking
+      renderedEvents.clear();
+      removeTypingIndicator();
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+
+      function finishSession(statusMessage) {
+        removeTypingIndicator();
+        liveStatus.innerText = statusMessage;
+        btnStart.disabled = false;
+        btnEnd.disabled = true;
+        liveDot.className = 'dot';
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+      }
+
+      function processEvent(eventType, d) {
+        if (!d) return;
+        const eventKey = `${eventType}_${d.turn_index || ''}_${d.timestamp || ''}_${(d.text || d.status_text || '').substring(0, 15)}`;
+        if (renderedEvents.has(eventKey)) return;
+        renderedEvents.add(eventKey);
+
+        if (eventType === 'typing') {
+          showTypingIndicator(d.sender, d.name, d.status_text);
+        } else if (eventType === 'customer_turn') {
+          removeTypingIndicator();
+          liveStatus.innerText = `${d.customer_name} sent message`;
+          appendMessage('Customer', d.customer_name, d.text, 'chat-customer', d.timestamp);
+        } else if (eventType === 'service_turn') {
+          removeTypingIndicator();
+          liveStatus.innerText = 'Apex Support AI replied';
+          appendMessage('Customer service', 'Apex Support AI', d.text, 'chat-service', d.timestamp, d.tools_used);
+        } else if (eventType === 'rating') {
+          removeTypingIndicator();
+          showRating(d.rating, d.description, d.timestamp);
+        } else if (eventType === 'complete') {
+          removeTypingIndicator();
+          finishSession('Session completed');
+        } else if (eventType === 'aborted') {
+          removeTypingIndicator();
+          finishSession('Aborted by user');
+        }
+      }
+
+      // 1. Primary channel: EventSource SSE
+      try {
+        eventSource = new EventSource(`/api/conversation/stream/${sessionId}`);
+
+        eventSource.addEventListener('typing', (e) => {
+          try { processEvent('typing', JSON.parse(e.data)); } catch (err) { console.error(err); }
+        });
+
+        eventSource.addEventListener('customer_turn', (e) => {
+          try { processEvent('customer_turn', JSON.parse(e.data)); } catch (err) { console.error(err); }
+        });
+
+        eventSource.addEventListener('service_turn', (e) => {
+          try { processEvent('service_turn', JSON.parse(e.data)); } catch (err) { console.error(err); }
+        });
+
+        eventSource.addEventListener('rating', (e) => {
+          try { processEvent('rating', JSON.parse(e.data)); } catch (err) { console.error(err); }
+        });
+
+        eventSource.addEventListener('complete', () => {
+          processEvent('complete', { status: 'SUCCESS' });
+        });
+
+        eventSource.addEventListener('aborted', () => {
+          processEvent('aborted', { reason: 'user' });
+        });
+
+        eventSource.onerror = (err) => {
+          // SSE temporary pause or reconnect: do not kill session, fallback polling is active
+          console.debug('SSE stream keep-alive or reconnecting...', err);
+        };
+      } catch (sseErr) {
+        console.warn('SSE initialization failed, utilizing polling fallback:', sseErr);
+      }
+
+      // 2. Secondary fallback channel: Polling every 1.2s to prevent freezing under any network condition
+      pollInterval = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/conversation/poll/${sessionId}`);
+          if (!pollRes.ok) return;
+          const pollData = await pollRes.json();
+
+          if (pollData.events && Array.isArray(pollData.events)) {
+            pollData.events.forEach((evt) => {
+              processEvent(evt.type, evt.data);
+            });
+          }
+
+          if (pollData.is_finished) {
+            finishSession('Session completed');
+          }
+        } catch (pollErr) {
+          console.debug('Polling check note:', pollErr);
+        }
+      }, 1200);
+    }
+
+    function appendMessage(sender, name, text, cssClass, timestamp, tools) {
+      removeTypingIndicator();
+      const chatBox = document.getElementById('chat-stream');
+      const msg = document.createElement('div');
+      msg.className = `chat-message ${cssClass}`;
+      
+      let meta = timestamp ? new Date(timestamp * 1000).toLocaleTimeString() : '';
+      if (tools && tools.length > 0) {
+        meta += ` • Tools: ${tools.join(', ')}`;
+      }
+
+      msg.innerHTML = `
+        <div class="chat-label">
+          <span>${sender}: <strong>${name}</strong></span>
+          <span class="chat-meta">${meta}</span>
+        </div>
+        <div>${text}</div>
+      `;
+      chatBox.appendChild(msg);
+      chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });
+    }
+
+    function showRating(rating, desc, timestamp) {
+      const box = document.getElementById('rating-box');
+      const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+      document.getElementById('rating-stars').innerText = stars;
+      let tsText = '';
+      if (timestamp) {
+        try {
+          const date = new Date(timestamp);
+          tsText = ` • ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+        } catch (_) {}
+      }
+      document.getElementById('rating-desc').innerText = `"${desc}" (Score: ${rating}/5${tsText})`;
+      box.style.display = 'flex';
+    }
+
+    // End / Abort Conversation
+    async function endConversation() {
+      if (!activeSessionId) return;
+      removeTypingIndicator();
+      document.getElementById('live-status-text').innerText = 'Aborting session...';
+      try {
+        await fetch(`/api/conversation/stop/${activeSessionId}`, { method: 'POST' });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // Run Auditor Agent
+    async function runAuditorAgent() {
+      const btn = document.getElementById('btn-auditor');
+      btn.disabled = true;
+      btn.innerText = '⏳ Running Auditor Pipeline...';
+
+      try {
+        const res = await fetch('/api/auditor/run', { method: 'POST' });
+        const report = await res.json();
+
+        const box = document.getElementById('auditor-results');
+        const issuesList = document.getElementById('auditor-issues-list');
+        issuesList.innerHTML = '';
+        report.detected_issues.forEach(issue => {
+          const li = document.createElement('li');
+          li.innerText = issue;
+          issuesList.appendChild(li);
+        });
+
+        const statsEl = document.getElementById('auditor-stats');
+        if (report.github_commit_success) {
+          statsEl.innerHTML = `
+            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
+              <div style="color: #34d399; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                <span>✅</span> <span>GitHub Sync Active</span>
+                <span class="badge" style="background: rgba(59, 130, 246, 0.25); color: #93c5fd; font-size: 0.75rem;">Branch: ${report.target_branch || 'main'}</span>
+                ${report.target_branch === 'new_version' ? '<span class="badge" style="background: rgba(245, 158, 11, 0.25); color: #fbbf24; font-size: 0.75rem;">Awaiting Human Review</span>' : '<span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 0.75rem;">Main Production</span>'}
+                <span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; margin-left: auto;">${report.estimated_token_savings} Token Savings</span>
+              </div>
+              <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 0.25rem;">${report.github_commit_status}</div>
+            </div>`;
+        } else {
+          const isDeployKeyNotice = (report.github_commit_status || '').includes('deploy key') || (report.github_commit_status || '').includes('publickey');
+          statsEl.innerHTML = `
+            <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
+              <div style="color: #fbbf24; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
+                <span>⚠️</span> <span>${isDeployKeyNotice ? 'Deploy Key Configuration Required' : 'GitHub Sync Notice'}</span>
+                <span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; margin-left: auto;">${report.estimated_token_savings} Token Savings</span>
+              </div>
+              <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 0.25rem; line-height: 1.4;">${report.github_commit_status}</div>
+              ${isDeployKeyNotice ? `
+                <div style="margin-top: 0.5rem; background: rgba(0,0,0,0.35); border-radius: 4px; padding: 0.5rem 0.6rem; font-size: 0.75rem; color: #e2e8f0; line-height: 1.5;">
+                  <div style="color: #93c5fd; font-weight: 600; margin-bottom: 0.25rem;">
+                    Action required by repo owner: Go to <a href="https://github.com/gshilo/experthub_context/settings/keys/new" target="_blank" style="color: #60a5fa; text-decoration: underline; font-weight: bold;">GitHub &gt; Repo Settings &gt; Deploy keys &gt; Add deploy key</a> (check <strong>"Allow write access"</strong>):
+                  </div>
+                  <div style="position: relative; margin-top: 0.35rem;">
+                    <code id="deploy-key-code" style="display: block; background: #0f172a; padding: 0.4rem 3.8rem 0.4rem 0.4rem; border-radius: 3px; color: #a5f3fc; font-family: monospace; word-break: break-all; user-select: all;">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIuAUjaTWaFizhIgxqp9HbnqRIRmaLVct+ZTXZY/a2ir experthub-auditor-deploy-key</code>
+                    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('deploy-key-code').innerText.trim()); this.innerText='Copied!';" style="position: absolute; right: 4px; top: 4px; font-size: 0.7rem; background: #2563eb; color: #fff; border: none; border-radius: 3px; padding: 2px 6px; cursor: pointer;">Copy</button>
+                  </div>
+                </div>
+              ` : `
+                <div style="margin-top: 0.4rem; background: rgba(0,0,0,0.3); border-radius: 4px; padding: 0.35rem 0.5rem; font-family: monospace; font-size: 0.75rem; color: #93c5fd; word-break: break-all;">
+                  echo -n 'ghp_YOUR_TOKEN' | gcloud secrets versions add github-pat --data-file=-
+                </div>
+              `}
+            </div>`;
+        }
+        document.getElementById('auditor-okf-text').innerText = report.okf_rule_block;
+        box.style.display = 'block';
+      } catch (err) {
+        alert('Auditor pipeline error: ' + err);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '🔍 Run Auditor Agent';
+      }
+    }
+
+    // Charts instances
+    let chartRatings = null;
+    let chartLatency = null;
+    let chartTokens = null;
+    let chartTools = null;
+
+    async function loadAnalyticsData() {
+      try {
+        const [sumRes, chartRes] = await Promise.all([
+          fetch('/api/analytics/summary').then(r => r.json()),
+          fetch('/api/analytics/charts').then(r => r.json())
+        ]);
+
+        // Update KPIs
+        document.getElementById('kpi-sessions').innerText = sumRes.total_sessions;
+        document.getElementById('kpi-rating').innerText = `${sumRes.avg_rating} / 5`;
+        document.getElementById('kpi-latency').innerText = `${sumRes.avg_latency_s}s`;
+
+        renderCharts(chartRes);
+      } catch (err) {
+        console.error('Error loading analytics data:', err);
+      }
+    }
+
+    function renderCharts(data) {
+      // 1. Ratings Chart
+      const ctxR = document.getElementById('chart-ratings').getContext('2d');
+      if (chartRatings) chartRatings.destroy();
+      chartRatings = new Chart(ctxR, {
+        type: 'bar',
+        data: {
+          labels: ['1 Star', '2 Stars', '3 Stars', '4 Stars', '5 Stars'],
+          datasets: [{
+            label: 'Customer Count',
+            data: data.ratings_dist,
+            backgroundColor: ['#ef4444', '#f97316', '#f59e0b', '#3b82f6', '#10b981'],
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+            x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+          }
+        }
+      });
+
+      // 2. Latency Chart
+      const ctxL = document.getElementById('chart-latency').getContext('2d');
+      if (chartLatency) chartLatency.destroy();
+      chartLatency = new Chart(ctxL, {
+        type: 'line',
+        data: {
+          labels: data.latency_timeline.labels,
+          datasets: [
+            {
+              label: 'Avg Latency (s)',
+              data: data.latency_timeline.avg,
+              borderColor: '#3b82f6',
+              tension: 0.3,
+            },
+            {
+              label: 'p95 Latency (s)',
+              data: data.latency_timeline.p95,
+              borderColor: '#f43f5e',
+              borderDash: [5, 5],
+              tension: 0.3,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#94a3b8' } } },
+          scales: {
+            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+            x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+          }
+        }
+      });
+
+      // 3. Token Consumption Chart
+      const ctxT = document.getElementById('chart-tokens').getContext('2d');
+      if (chartTokens) chartTokens.destroy();
+      chartTokens = new Chart(ctxT, {
+        type: 'bar',
+        data: {
+          labels: data.tokens_timeline.labels,
+          datasets: [
+            {
+              label: 'Input Tokens',
+              data: data.tokens_timeline.input_tokens,
+              backgroundColor: '#6366f1',
+              borderRadius: 6,
+            },
+            {
+              label: 'Output Tokens',
+              data: data.tokens_timeline.output_tokens,
+              backgroundColor: '#10b981',
+              borderRadius: 6,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#94a3b8' } } },
+          scales: {
+            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+            x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+          }
+        }
+      });
+
+      // 4. Tools Breakdown Chart
+      const ctxTools = document.getElementById('chart-tools').getContext('2d');
+      if (chartTools) chartTools.destroy();
+      chartTools = new Chart(ctxTools, {
+        type: 'doughnut',
+        data: {
+          labels: ['check_order_status', 'search_product_catalog', 'lookup_warranty_policy', 'initiate_return', 'lookup_billing_and_refund_status'],
+          datasets: [{
+            data: data.tools_breakdown,
+            backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'],
+            borderWidth: 0,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8' } } }
+        }
+      });
+    }
+
+    // Auto-refresh timer
+    setInterval(() => {
+      const toggle = document.getElementById('auto-refresh-toggle');
+      if (toggle && toggle.checked && document.getElementById('tab-analytics').classList.contains('active')) {
+        loadAnalyticsData();
+      }
+    }, 15000);
+  </script>
+</body>
+</html>
