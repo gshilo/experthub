@@ -1077,6 +1077,10 @@ def analytics_charts():
     latency_labels = ["10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"]
     latency_avg = [2.8, 3.1, 2.4, 2.9, 2.1, 1.9, 1.8]
     latency_p95 = [4.2, 4.6, 3.8, 4.1, 3.2, 2.9, 2.7]
+    tokens_time_labels = ["10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"]
+    tokens_time_input = [1420, 2150, 3100, 3850, 4600, 5120, 4800]
+    tokens_time_output = [210, 320, 280, 240, 290, 270, 250]
+    tokens_time_total = [1630, 2470, 3380, 4090, 4890, 5390, 5050]
     tokens_labels = ["Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6"]
     tokens_input = [140, 220, 310, 390, 470, 520]
     tokens_output = [65, 85, 55, 48, 42, 38]
@@ -1143,7 +1147,30 @@ def analytics_charts():
         except Exception as e:
             logger.info(f"BigQuery latency view query notice: {e}")
 
-        # 4. Token usage timeline from agent_telemetry.v_llm_response
+        # 4. Token consumption over time timeline from agent_telemetry.v_llm_response
+        try:
+            q_tokens_time = f"""
+                SELECT
+                    FORMAT_TIMESTAMP('%H:%M', timestamp) as time_label,
+                    CAST(SUM(usage_prompt_tokens) AS INT64) as prompt_tokens,
+                    CAST(SUM(usage_completion_tokens) AS INT64) as completion_tokens,
+                    CAST(SUM(COALESCE(usage_total_tokens, usage_prompt_tokens + usage_completion_tokens)) AS INT64) as total_tokens
+                FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
+                WHERE usage_prompt_tokens IS NOT NULL AND usage_completion_tokens IS NOT NULL
+                GROUP BY time_label
+                ORDER BY MIN(timestamp) ASC
+                LIMIT 8
+            """
+            token_time_rows = list(client.query(q_tokens_time).result())
+            if len(token_time_rows) >= 2:
+                tokens_time_labels = [r["time_label"] for r in token_time_rows]
+                tokens_time_input = [int(r["prompt_tokens"]) for r in token_time_rows]
+                tokens_time_output = [int(r["completion_tokens"]) for r in token_time_rows]
+                tokens_time_total = [int(r["total_tokens"]) for r in token_time_rows]
+        except Exception as e:
+            logger.info(f"BigQuery tokens timeline view query notice: {e}")
+
+        # 5. Token usage per turn from agent_telemetry.v_llm_response
         try:
             q_tokens = f"""
                 SELECT
@@ -1166,6 +1193,13 @@ def analytics_charts():
     except Exception as e:
         logger.info(f"BigQuery ratings chart notice: {e}")
 
+    tokens_time_data = {
+        "labels": tokens_time_labels,
+        "input_tokens": tokens_time_input,
+        "output_tokens": tokens_time_output,
+        "total_tokens": tokens_time_total,
+    }
+
     return jsonify({
         "ratings_dist": ratings_dist,
         "latency_timeline": {
@@ -1173,7 +1207,9 @@ def analytics_charts():
             "avg": latency_avg,
             "p95": latency_p95,
         },
-        "tokens_timeline": {
+        "tokens_timeline": tokens_time_data,
+        "tokens_over_time": tokens_time_data,
+        "tokens_by_turn": {
             "labels": tokens_labels,
             "input_tokens": tokens_input,
             "output_tokens": tokens_output,

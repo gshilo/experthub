@@ -80,7 +80,7 @@ flowchart TD
 5. **Immediate Dynamic Injection:**
    * On subsequent conversation turns, the Customer Service Agent retrieves the approved `dynamic_context.md` from `main` (via a 30s TTL cache) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
 6. **Analytics Dashboard:**
-   * The user navigates to **Tab 2** to observe real-time CSAT distributions (1 to 5 stars), latency over time, input/output token trends, and tool usage metrics.
+   * The user navigates to **Tab 2** (Visualization & Telemetry Analytics Dashboard) to observe real-time CSAT distributions (1 to 5 stars), response latency trends over time, token consumption over time (prompt, completion, and total tokens), tool usage breakdowns, and turn-by-turn token consumption.
 
 ---
 

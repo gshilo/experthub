@@ -452,7 +452,7 @@
 
   <nav class="tabs-nav">
     <button class="tab-button active" onclick="switchTab('tab-conversation')">Live Conversation & Auditor Workspace</button>
-    <button class="tab-button" onclick="switchTab('tab-analytics')">Auditor & Telemetry Analytics Dashboard</button>
+    <button class="tab-button" id="tab-button-analytics" onclick="switchTab('tab-analytics')">Visualization & Telemetry Analytics Dashboard</button>
   </nav>
 
   <main>
@@ -589,7 +589,7 @@
           </div>
         </div>
 
-        <!-- 4 Chart.js charts -->
+        <!-- Interactive Chart.js Telemetry Charts -->
         <div class="charts-grid">
           <div class="card" style="margin-bottom: 0;">
             <div class="card-title" style="font-size: 0.875rem;">Customer Satisfaction (CSAT) Distribution</div>
@@ -604,15 +604,21 @@
             </div>
           </div>
           <div class="card" style="margin-bottom: 0;">
-            <div class="card-title" style="font-size: 0.875rem;">Token Consumption (Input vs. Output Tokens)</div>
+            <div class="card-title" style="font-size: 0.875rem;">Token Consumption Over Time</div>
             <div class="chart-container">
-              <canvas id="chart-tokens"></canvas>
+              <canvas id="chart-tokens-over-time"></canvas>
             </div>
           </div>
           <div class="card" style="margin-bottom: 0;">
             <div class="card-title" style="font-size: 0.875rem;">Customer Service Tool Usage Breakdown</div>
             <div class="chart-container">
               <canvas id="chart-tools"></canvas>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 0; grid-column: 1 / -1;">
+            <div class="card-title" style="font-size: 0.875rem;">Turn-by-Turn Token Breakdown (Input vs. Output Tokens)</div>
+            <div class="chart-container">
+              <canvas id="chart-tokens"></canvas>
             </div>
           </div>
         </div>
@@ -625,9 +631,16 @@
     function switchTab(tabId) {
       document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-      event.target.classList.add('active');
-      document.getElementById(tabId).classList.add('active');
-      if (tabId === 'tab-analytics') {
+      if (window.event && window.event.target && window.event.target.classList) {
+        window.event.target.classList.add('active');
+      } else {
+        const btn = document.querySelector(`[onclick*="${tabId}"]`) || document.getElementById('tab-button-analytics');
+        if (btn) btn.classList.add('active');
+      }
+      const actualId = (tabId === 'tab-visualization') ? 'tab-analytics' : tabId;
+      const contentEl = document.getElementById(actualId) || document.getElementById(tabId);
+      if (contentEl) contentEl.classList.add('active');
+      if (actualId === 'tab-analytics' || tabId === 'tab-visualization') {
         loadAnalyticsData();
       }
     }
@@ -955,6 +968,7 @@
     // Charts instances
     let chartRatings = null;
     let chartLatency = null;
+    let chartTokensOverTime = null;
     let chartTokens = null;
     let chartTools = null;
 
@@ -1036,38 +1050,57 @@
         }
       });
 
-      // 3. Token Consumption Chart
-      const ctxT = document.getElementById('chart-tokens').getContext('2d');
-      if (chartTokens) chartTokens.destroy();
-      chartTokens = new Chart(ctxT, {
-        type: 'bar',
-        data: {
-          labels: data.tokens_timeline.labels,
-          datasets: [
-            {
-              label: 'Input Tokens',
-              data: data.tokens_timeline.input_tokens,
-              backgroundColor: '#6366f1',
-              borderRadius: 6,
+      // 3. Token Consumption Over Time Chart
+      const canvasTot = document.getElementById('chart-tokens-over-time');
+      if (canvasTot) {
+        const ctxTot = canvasTot.getContext('2d');
+        if (chartTokensOverTime) chartTokensOverTime.destroy();
+        const totData = data.tokens_over_time || data.tokens_timeline;
+        chartTokensOverTime = new Chart(ctxTot, {
+          type: 'line',
+          data: {
+            labels: totData.labels,
+            datasets: [
+              {
+                label: 'Input Tokens',
+                data: totData.input_tokens,
+                borderColor: '#6366f1',
+                backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                tension: 0.3,
+                fill: true,
+              },
+              {
+                label: 'Output Tokens',
+                data: totData.output_tokens,
+                borderColor: '#10b981',
+                backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                tension: 0.3,
+                fill: true,
+              },
+              {
+                label: 'Total Tokens',
+                data: totData.total_tokens || totData.input_tokens.map((v, i) => v + (totData.output_tokens[i] || 0)),
+                borderColor: '#38bdf8',
+                borderDash: [4, 4],
+                tension: 0.3,
+                fill: false,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { labels: { color: '#94a3b8' } },
+              tooltip: { mode: 'index', intersect: false }
             },
-            {
-              label: 'Output Tokens',
-              data: data.tokens_timeline.output_tokens,
-              backgroundColor: '#10b981',
-              borderRadius: 6,
+            scales: {
+              y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+              x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
             }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { labels: { color: '#94a3b8' } } },
-          scales: {
-            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
-            x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
           }
-        }
-      });
+        });
+      }
 
       // 4. Tools Breakdown Chart
       const ctxTools = document.getElementById('chart-tools').getContext('2d');
@@ -1088,6 +1121,43 @@
           plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8' } } }
         }
       });
+
+      // 5. Turn-by-Turn Token Breakdown Chart
+      const canvasT = document.getElementById('chart-tokens');
+      if (canvasT) {
+        const ctxT = canvasT.getContext('2d');
+        if (chartTokens) chartTokens.destroy();
+        const turnData = data.tokens_by_turn || data.tokens_timeline;
+        chartTokens = new Chart(ctxT, {
+          type: 'bar',
+          data: {
+            labels: turnData.labels,
+            datasets: [
+              {
+                label: 'Input Tokens',
+                data: turnData.input_tokens,
+                backgroundColor: '#6366f1',
+                borderRadius: 6,
+              },
+              {
+                label: 'Output Tokens',
+                data: turnData.output_tokens,
+                backgroundColor: '#10b981',
+                borderRadius: 6,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#94a3b8' } } },
+            scales: {
+              y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+              x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+            }
+          }
+        });
+      }
     }
 
     // Auto-refresh timer

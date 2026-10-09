@@ -10,12 +10,13 @@ The **Frontend Web Application** provides the unified user interface for the Sel
 * **"End conversation" Button:** Gracefully aborts an in-progress session, triggering early evaluation and immediate feedback persistence to BigQuery.
 * **Auditor Workspace:** Features an on-demand **"Run Auditor Agent"** button that invokes the Auditor pipeline, displays detected bottlenecks, highlights token efficiency gains, and presents the committed Open Knowledge Format (OKF v0.2) rules.
 
-### Tab 2: Auditor & Telemetry Analytics Dashboard
+### Tab 2: Visualization & Telemetry Analytics Dashboard
 Queries Google BigQuery (`agent_telemetry` and `demo.customer_ratings`) and visualizes:
 1. **Customer Satisfaction (CSAT) Distribution:** 1 to 5 star ratings.
 2. **Response Latency Over Time:** Average turn latency and 95th percentile spikes.
-3. **Token Consumption Over Time:** Prompt input vs. completion output tokens.
+3. **Token Consumption Over Time:** Prompt input, completion output, and total tokens tracked across telemetry timeline timestamps.
 4. **Tool Invocations Breakdown:** Catalog searches, order status checks, warranty lookups, and return requests.
+5. **Turn-by-Turn Token Breakdown:** Multi-turn conversational prompt and completion token evolution.
 
 ## 3. Dependencies, Telemetry & Agent Engine Observability
 In order to enable logging, telemetry, and Observability settings in Vertex AI Agent Engine, ensure all agents are using:
