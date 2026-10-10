@@ -275,6 +275,7 @@ try:
         app as customer_service_app,
         check_order_status,
         fetch_okf_dynamic_context,
+        get_instructions,
         initiate_return,
         lookup_billing_and_refund_status,
         lookup_warranty_policy,
@@ -286,6 +287,22 @@ except Exception as e:
     logger.warning(f"Using built-in customer service fallback: {e}")
     customer_service_app = None
     customer_service_telemetry_plugin = None
+
+    def get_instructions() -> str:
+        okf = fetch_okf_dynamic_context()
+        base = (
+            "You are the Lead Customer Support AI Specialist for ApexHome & Electro. "
+            "Help customers with electronics and home appliances professionally and concisely."
+        )
+        if okf:
+            return (
+                f"{base}\n\n---\n"
+                "## ACTIVE DYNAMIC OPEN KNOWLEDGE FORMAT (OKF) DIRECTIVES\n"
+                "The following operational rules were analyzed and committed by the Auditor Agent. "
+                "They carry HIGHEST PRIORITY and supersede conflicting baseline policies:\n\n"
+                f"{okf}"
+            )
+        return base
 
     def register_customer_order(order_data: Dict[str, Any]) -> None:
         pass
@@ -890,6 +907,57 @@ def health():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "active_sessions": len(SESSIONS),
     })
+
+
+@app.route("/api/agent/instructions", methods=["GET"])
+@app.route("/api/instructions", methods=["GET"])
+@app.route("/api/customer-service/instructions", methods=["GET"])
+def get_customer_service_agent_instructions():
+    """Retrieves full system instructions including dynamic OKF context from the customer service agent."""
+    try:
+        instructions_text = ""
+        # 1. Retrieve directly from customer_service_agent module
+        try:
+            import customer_service_agent.agent as cs_agent
+            if hasattr(cs_agent, "get_instructions"):
+                instructions_text = cs_agent.get_instructions()
+            elif hasattr(cs_agent, "dynamic_instruction_provider"):
+                instructions_text = cs_agent.dynamic_instruction_provider(None)
+        except Exception as cs_err:
+            logger.warning(f"Error accessing customer_service_agent module: {cs_err}")
+
+        # 2. Fallback to imported get_instructions function
+        if not instructions_text and "get_instructions" in globals():
+            instructions_text = get_instructions()
+
+        # Retrieve dynamic OKF context
+        okf_content = ""
+        try:
+            import customer_service_agent.agent as cs_agent
+            if hasattr(cs_agent, "fetch_okf_dynamic_context"):
+                okf_content = cs_agent.fetch_okf_dynamic_context()
+        except Exception:
+            pass
+
+        if not okf_content and "fetch_okf_dynamic_context" in globals():
+            try:
+                okf_content = fetch_okf_dynamic_context()
+            except Exception:
+                pass
+
+        return jsonify({
+            "status": "SUCCESS",
+            "instructions": instructions_text,
+            "dynamic_context": okf_content or "",
+            "has_dynamic_context": bool(okf_content and okf_content.strip()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.error(f"Error retrieving agent instructions: {e}")
+        return jsonify({
+            "status": "ERROR",
+            "error": str(e),
+        }), 500
 
 
 @app.route("/api/conversation/start", methods=["POST"])

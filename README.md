@@ -57,7 +57,12 @@ flowchart TD
 1. **Live Customer Interaction (Dynamic & Human-Like Simulation):**
    * The user clicks **"Start conversation"** in the web interface.
    * The **Customer Simulator Agent** dynamically generates a completely novel customer persona live via `gemini-3.8-flash` on every trigger across 20+ problem categories, 22 product domains, and real-world stakes.
-   * The simulator exchanges messages with the **Customer Service Agent** across an extensive **6–8 turn back-and-forth dialogue** with realistic **human chat pacing (~5–7s per turn, with typing indicators)**, streamed in real time via **Server-Sent Events (SSE)**.
+    * The simulator exchanges messages with the **Customer Service Agent** across an extensive **6–8 turn back-and-forth dialogue** with realistic **human chat pacing (~5–7s per turn, with typing indicators)**, streamed in real time via **Server-Sent Events (SSE)**.
+   * **Agent Instruction Inspection ("Show instructions"):**
+     * The frontend provides a **"Show instructions"** button in the Live Conversation tab.
+     * Clicking it invokes `/api/agent/instructions`, which queries the Customer Service Agent (`customer_service_agent.agent.get_instructions()`) to fetch its full system prompt.
+     * The retrieved instructions include base operational policies from `AGENT.md`, active dynamic directives loaded from the Open Knowledge Format (`dynamic_context.md`) on GitHub, and strict response style mandates.
+     * Instructions are presented in an accessible modal dialog with copy functionality and dynamic OKF status indicators, as well as an inline viewer.
    * **Human-Like Customer Service Communication:**
      * **Strict Sentence Limit:** Customer service responses are strictly capped at maximum **2 to 3 sentences** per turn, mirroring concise live support chat messaging.
      * **Plain Text Only:** Zero markdown bolding (`**`) and zero long dashes (`—`, `–`, `--`).

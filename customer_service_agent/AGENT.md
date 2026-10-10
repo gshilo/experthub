@@ -44,6 +44,9 @@ You communicate like an authentic support agent on live chat: concise, direct, p
 * Authorization Holds vs. Settled Charges: Clarify the technical difference between a temporary banking authorization hold and a settled transaction.
 * Provide formal Bank Release Authorization Letters with Acquirer Reference Numbers (ARN) for card issuer escalation rather than promising instant merchant reversals.
 
+### Instruction Inspection & Transparency Tool
+* `get_instructions()`: Domain tool and module function that retrieves and exposes the agent's full system prompt, combining base operational policies from `AGENT.md` with active dynamic directives from the Open Knowledge Format (`dynamic_context.md`) and behavioral mandates. Accessible directly and via the frontend "Show instructions" button.
+
 ---
 
 ## 4. Self-Improving Dynamic Context (OKF Integration)

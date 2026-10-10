@@ -512,3 +512,38 @@ The enhanced architecture was validated across multiple live multi-turn scenario
 - **Zero Markdown Bolding & Zero Long Dashes:** Prohibited markdown bolding (`**`) and long dashes (`—`, `–`, `--`) across instructions and added regex sanitization in `frontend/app.py` to ensure clean, conversational plain text.
 - **Authentic Non-Sycophantic Demeanor:** Removed saccharine corporate apologies and excessive compliments. The agent acts like a real support employee who can be blunt, dry, tired, skeptical, or firm.
 - **Realistic Slight Conflict:** The agent is empowered to push back when customers make unrealistic demands, ask for instant refunds without troubleshooting, or challenge standard store policies. The agent stands firm on the 30-day return window, 15% open-box restocking fee, and 48-hour carrier trace requirement.
+
+
+---
+
+## 12. Agent Instruction Inspection & Dynamic Context Display Architecture
+
+### 1. Architectural Motivation & User Transparency
+To provide complete transparency into the self-improving agent system and enable users to audit active instructions in real time, the architecture incorporates an on-demand instruction inspection pipeline:
+* Users need to verify what operational rules the Customer Service Agent is currently following.
+* Users need to confirm that dynamic context directives formulated by the Auditor Agent and retrieved from the Open Knowledge Format (OKF v0.2) file (`dynamic_context.md` on GitHub) are active and in effect.
+* Transparent inspection bridges the feedback loop: users see Auditor Agent commits on GitHub and can immediately verify that the Customer Service Agent has ingested those exact rules.
+
+### 2. Component Implementation & Integration
+
+#### A. Customer Service Agent (`customer_service_agent/agent.py`)
+* **`get_instructions()` Function & Agent Tool:**
+  - Implements a dedicated retrieval function `get_instructions()` (aliased as `get_agent_instructions`) that invokes `dynamic_instruction_provider(None)`.
+  - Merges base system instructions from `customer_service_agent/AGENT.md`, dynamic OKF rules fetched from GitHub `dynamic_context.md` via `fetch_okf_dynamic_context()`, and non-negotiable response style mandates (2–3 sentences, zero bolding, zero long dashes).
+  - Registered in `root_agent.tools`, making it callable both as a Python module method and as an ADK domain tool in Vertex AI Agent Engine.
+
+#### B. Frontend Backend Orchestration (`frontend/app.py`)
+* **API Endpoints (`/api/agent/instructions`, `/api/instructions`, `/api/customer-service/instructions`):**
+  - Resolves active instructions directly from `customer_service_agent.agent.get_instructions()` with in-file fallback support.
+  - Retrieves raw dynamic context from `fetch_okf_dynamic_context()` to signal active OKF status (`has_dynamic_context`).
+  - Returns a structured JSON payload with status, merged instructions, and raw OKF content.
+
+#### C. Frontend UI Ergonomics (`frontend/templates/index.html`)
+* **"Show instructions" Button:** Placed prominently in the Live Conversation controls next to "Start conversation" and "End conversation".
+* **Modal Dialog (`#instructions-modal`):**
+  - Renders a clean, accessible backdrop dialog with smooth entry animations.
+  - Displays dynamic OKF active badges, copy-to-clipboard functionality (`#btn-copy-instructions`), and keyboard shortcuts (`Escape` to dismiss).
+  - Monospace scrollable container (`#instructions-content` / `#instructions-text`) displays complete instructions with line-wrapped formatting.
+* **Inline Container (`#instructions-inline-container`):**
+  - Provides a complementary inline viewer (`#instructions-display`) within the main workspace card for continuous visibility.
+

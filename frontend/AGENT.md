@@ -32,6 +32,7 @@ Content-Type: `text/event-stream`
 ### Tab 1: Live Conversation & Auditor Workspace
 * **Start conversation:** Launches a background simulation thread, assigns a random customer persona, and streams alternating turns with realistic human pacing (~5–7s/turn default, or selectable relaxed ~7–10s / fast ~2s). Displays animated typing indicators while agents formulate replies.
 * **End conversation:** Triggers immediate graceful abortion, prompting the customer agent to evaluate the interaction up to that point and persist its rating to BigQuery `demo.customer_ratings`.
+* **Show instructions:** Queries `/api/agent/instructions` to retrieve the Customer Service Agent's full system prompt—including dynamic OKF rules loaded from `dynamic_context.md` on GitHub and behavioral style constraints—and renders them in an interactive modal with copy functionality and status badges, as well as an inline viewer.
 * **Run Auditor Agent:** Calls the Auditor pipeline on demand, displays detected policy/latency issues, token optimization metrics, and synchronizes rules with GitHub: creates `dynamic_context.md` on `main` if missing, or makes additive changes on `new_version` branch awaiting human review before merge into `main`. Displays target branch badge and pending human review pill.
 
 ### Tab 2: Telemetry & Analytics Dashboard
@@ -62,7 +63,7 @@ These library standards provide comprehensive Cloud Logging capture, OpenTelemet
 
 ## 6. Cloud Run Deployment & Service Configuration
 * **Service Name:** `experthub-frontend`
-* **Active Revision:** `experthub-frontend-00016-krh`
+* **Active Revision:** `experthub-frontend-00018-v9x`
 * **Live Service URL:** [https://experthub-frontend-537563976049.us-central1.run.app](https://experthub-frontend-537563976049.us-central1.run.app)
 * **Associated Agent Engine IDs:**
   * `CUSTOMER_SERVICE_AGENT_ID`: `2556039354015285248`

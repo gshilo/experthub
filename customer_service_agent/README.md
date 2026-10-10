@@ -43,6 +43,7 @@ pydantic>=2.10.0
 * `lookup_warranty_policy(category_or_product)`: Explains 1-year manufacturer warranty terms, defect diagnostic requirements, on-site service booking, and advance replacement collateral hold policies.
 * `initiate_return(order_id, reason)`: Evaluates return eligibility under strict store policies (30-day window, 15% open-box restocking fee, return freight deduction) and generates conditional Return Merchandise Authorization (RMA) codes.
 * `lookup_billing_and_refund_status(order_id)`: Queries payment authorization holds vs settled charges, warehouse return inspection quarantine status, and credit memo processing.
+* `get_instructions()`: Retrieves the full system instructions for the Customer Service Agent, combining baseline guidelines from `AGENT.md` with active dynamic directives received from the OKF file (`dynamic_context.md`) and strict response style mandates. Exposed as an agent tool and via module export for the frontend "Show instructions" button.
 
 ## 6. Response Formatting & Behavioral Realism
 * **Strict Sentence Limit:** Responses are capped at maximum 2 to 3 sentences per turn, matching authentic chat representative pacing.
