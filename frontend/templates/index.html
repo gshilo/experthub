@@ -363,6 +363,83 @@
       margin-top: 0.75rem;
     }
 
+    /* Instructions Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 1.5rem;
+    }
+    .modal-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 900px;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+      animation: modalFadeIn 0.2s ease-out;
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .modal-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .modal-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .modal-body {
+      padding: 1.25rem 1.5rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .modal-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.4);
+      border-bottom-left-radius: 12px;
+      border-bottom-right-radius: 12px;
+    }
+    .instructions-viewer {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: #cbd5e1;
+      max-height: 55vh;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     /* Analytics Dashboard */
     .kpi-row {
       display: grid;
@@ -472,12 +549,15 @@
 
             <!-- Controls -->
             <div class="btn-group" style="margin-bottom: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem;">
-              <div style="display: flex; gap: 0.75rem;">
+              <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
                 <button class="btn btn-primary" id="btn-start" onclick="startConversation()">
                   ▶ Start conversation
                 </button>
                 <button class="btn btn-danger" id="btn-end" onclick="endConversation()" disabled>
                   ⏹ End conversation
+                </button>
+                <button class="btn btn-outline" id="btn-show-instructions" onclick="showInstructions()">
+                  Show instructions
                 </button>
               </div>
               <div style="display: flex; align-items: center; gap: 0.5rem;">
@@ -488,6 +568,15 @@
                   <option value="fast">Fast / Demo (~2s/turn)</option>
                 </select>
               </div>
+            </div>
+
+            <!-- Inline agent instructions section -->
+            <div id="instructions-inline-container" style="display: none; margin-bottom: 1rem; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <span style="font-size: 0.85rem; font-weight: 600; color: #60a5fa;">Customer Service Agent Instructions & Dynamic Context</span>
+                <button class="btn btn-outline" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" onclick="document.getElementById('instructions-inline-container').style.display='none'">Hide</button>
+              </div>
+              <pre class="okf-viewer" id="instructions-display" style="max-height: 220px;"></pre>
             </div>
 
             <!-- Persona details -->
@@ -625,6 +714,37 @@
       </div>
     </div>
   </main>
+
+  <!-- Modal: Customer Service Agent Instructions -->
+  <div id="instructions-modal" class="modal-overlay" onclick="handleModalOverlayClick(event)">
+    <div class="modal-container">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📋 Customer Service Agent Instructions</span>
+          <span class="badge" id="instructions-status-badge">● Loading...</span>
+        </div>
+        <button class="btn btn-outline" style="padding: 0.25rem 0.6rem; font-size: 1rem; border-radius: 6px;" onclick="closeInstructions()" title="Close (Esc)">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.75rem;">
+          Active instructions retrieved directly from the Customer Service Agent, merging base system instructions with dynamic context directives from the OKF file (<code style="color: #93c5fd;">dynamic_context.md</code>).
+        </p>
+        <div class="instructions-viewer" id="instructions-content">Loading instructions...</div>
+        <pre id="instructions-text" style="display: none;"></pre>
+      </div>
+      <div class="modal-footer">
+        <span style="font-size: 0.75rem; color: #64748b;">Source: Customer Service Agent &bull; Open Knowledge Format (OKF)</span>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-outline" id="btn-copy-instructions" onclick="copyInstructions()">
+            📋 Copy instructions
+          </button>
+          <button class="btn btn-primary" onclick="closeInstructions()">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script>
     // Tab switching
@@ -897,6 +1017,89 @@
         console.error(err);
       }
     }
+
+    // Show Customer Service Agent Instructions
+    async function showInstructions() {
+      const btn = document.getElementById('btn-show-instructions');
+      const modal = document.getElementById('instructions-modal');
+      const contentEl = document.getElementById('instructions-content');
+      const textEl = document.getElementById('instructions-text');
+      const statusBadge = document.getElementById('instructions-status-badge');
+      const inlineContainer = document.getElementById('instructions-inline-container');
+      const inlineDisplay = document.getElementById('instructions-display');
+
+      if (btn) btn.disabled = true;
+      if (modal) modal.style.display = 'flex';
+      if (contentEl) contentEl.innerText = 'Retrieving instructions from Customer Service Agent...';
+
+      try {
+        const res = await fetch('/api/agent/instructions');
+        if (!res.ok) {
+          throw new Error(`Server returned HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const instructions = data.instructions || 'No instructions found.';
+
+        if (contentEl) contentEl.innerText = instructions;
+        if (textEl) textEl.innerText = instructions;
+        if (inlineDisplay) inlineDisplay.innerText = instructions;
+        if (inlineContainer) inlineContainer.style.display = 'block';
+
+        if (statusBadge) {
+          if (data.has_dynamic_context) {
+            statusBadge.className = 'badge badge-active';
+            statusBadge.innerText = '● Dynamic OKF Context Active';
+          } else {
+            statusBadge.className = 'badge';
+            statusBadge.innerText = '● Baseline Instructions';
+          }
+        }
+      } catch (err) {
+        console.error('Error retrieving agent instructions:', err);
+        const errMsg = 'Failed to retrieve instructions from Customer Service Agent: ' + err.message;
+        if (contentEl) contentEl.innerText = errMsg;
+        if (textEl) textEl.innerText = errMsg;
+        if (statusBadge) {
+          statusBadge.className = 'badge';
+          statusBadge.innerText = '● Retrieval Error';
+        }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function closeInstructions() {
+      const modal = document.getElementById('instructions-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function handleModalOverlayClick(e) {
+      if (e.target && e.target.id === 'instructions-modal') {
+        closeInstructions();
+      }
+    }
+
+    function copyInstructions() {
+      const contentEl = document.getElementById('instructions-content');
+      const btn = document.getElementById('btn-copy-instructions');
+      if (contentEl && contentEl.innerText) {
+        navigator.clipboard.writeText(contentEl.innerText).then(() => {
+          if (btn) {
+            const original = btn.innerText;
+            btn.innerText = '✓ Copied!';
+            setTimeout(() => { btn.innerText = original; }, 2000);
+          }
+        }).catch(err => {
+          console.warn('Clipboard write failed:', err);
+        });
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeInstructions();
+      }
+    });
 
     // Run Auditor Agent
     async function runAuditorAgent() {

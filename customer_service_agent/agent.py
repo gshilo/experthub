@@ -249,7 +249,7 @@ def get_base_instructions() -> str:
     )
 
 
-def dynamic_instruction_provider(context: CallbackContext) -> str:
+def dynamic_instruction_provider(context: Optional[CallbackContext] = None) -> str:
     """Merges base AGENT.md instructions with dynamic OKF rules from GitHub."""
     base = get_base_instructions()
     dynamic_okf = fetch_okf_dynamic_context().strip()
@@ -278,6 +278,14 @@ def dynamic_instruction_provider(context: CallbackContext) -> str:
         "======================================================\n"
     )
     return merged + strict_style_rules
+
+
+def get_instructions() -> str:
+    """Returns the customer service agent's full system instructions including the dynamic context received from the dynamic context OKF file."""
+    return dynamic_instruction_provider(None)
+
+
+get_agent_instructions = get_instructions
 
 
 # =====================================================================
@@ -705,6 +713,7 @@ root_agent = Agent(
         lookup_warranty_policy,
         initiate_return,
         lookup_billing_and_refund_status,
+        get_instructions,
     ],
 )
 
