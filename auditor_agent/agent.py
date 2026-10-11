@@ -985,13 +985,57 @@ def get_base_instructions() -> str:
     )
 
 
+def get_bigquery_ai_skill_instructions() -> str:
+    """Returns the BigQuery AI & Generative AI Functions skill guide for SQL query inspection and optimization."""
+    skill_file = pathlib.Path(__file__).parent / "bigquery_ai_functions_skill.md"
+    if skill_file.exists():
+        return skill_file.read_text(encoding="utf-8")
+    alt_file = pathlib.Path(__file__).parent / "skills" / "bigquery-ai-functions" / "SKILL.md"
+    if alt_file.exists():
+        return alt_file.read_text(encoding="utf-8")
+    return "BigQuery AI functions skill guide not found."
+
+
+def get_auditor_skills() -> list:
+    """Loads specialized skills for the auditor agent from the local skills directory."""
+    skills_dir = pathlib.Path(__file__).parent / "skills"
+    if skills_dir.exists():
+        try:
+            from google.adk.skills import load_skills_from_dir
+            return load_skills_from_dir(skills_dir)
+        except Exception as e:
+            logger.warning(f"Could not load skills from {skills_dir}: {e}")
+    return []
+
+
+def get_skill_toolset() -> Optional[Any]:
+    """Initializes ADK SkillToolset with local auditor skills."""
+    skills = get_auditor_skills()
+    if not skills:
+        return None
+    try:
+        from google.adk.tools.skill_toolset import SkillToolset
+        toolset = SkillToolset(skills=skills)
+        logger.info(f"Initialized SkillToolset with {len(skills)} skill(s): {[s.name for s in skills]}")
+        return toolset
+    except Exception as e:
+        logger.warning(f"Could not initialize SkillToolset for auditor agent: {e}")
+        return None
+
+
+# Assemble tools including BigQuery AI skill capabilities
+_auditor_tools: list[Any] = [run_audit_pipeline, get_bigquery_ai_skill_instructions]
+_skill_toolset = get_skill_toolset()
+if _skill_toolset is not None:
+    _auditor_tools.append(_skill_toolset)
+
 # ADK 2.0 Auditor Agent Definition
 root_agent = Agent(
     name="auditor_agent",
     description="Multi-agent auditor analyzing telemetry, token efficiency, and authoring OKF rules.",
     model="gemini-3.8-flash",
     instruction=get_base_instructions(),
-    tools=[run_audit_pipeline],
+    tools=_auditor_tools,
 )
 
 app = App(

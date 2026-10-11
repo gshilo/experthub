@@ -71,3 +71,11 @@ To enable the Auditor Agent to push generated OKF rules directly to GitHub:
    echo -n "ghp_YOUR_TOKEN" | gcloud secrets versions add github-pat --data-file=-
    ```
 3. If the secret contains the initial deployment placeholder (`PLACEHOLDER_GITHUB_PAT`), the Auditor Agent safely validates rules locally and provides explicit instructions in the UI without throwing unhandled exceptions.
+
+## 7. BigQuery AI & Generative AI Functions Skill
+The Auditor Agent includes the **BigQuery AI & Generative AI Functions** skill:
+* **Skill File Location:** [`skills/bigquery-ai-functions/SKILL.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/skills/bigquery-ai-functions/SKILL.md) and [`bigquery_ai_functions_skill.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/bigquery_ai_functions_skill.md)
+* **ADK Skill Identifier:** `bigquery-ai-functions`
+* **Toolset:** Registered via Google ADK 2.0 `SkillToolset` and exposed through `get_bigquery_ai_skill_instructions` tool.
+* **Capabilities:** Enables SQL-native generative AI inspection (`AI.GENERATE`, `AI.GENERATE_TEXT`), natural language semantic filtering (`AI.IF`), scoring (`AI.SCORE`), zero-shot classification (`AI.CLASSIFY`), aggregation (`AI.AGG`), and vector embeddings (`AI.GENERATE_EMBEDDING`, `VECTOR_SEARCH`) across telemetry logs and customer feedback in BigQuery.
+
