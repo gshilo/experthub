@@ -134,3 +134,27 @@ These library specifications and telemetry settings ensure audit executions, too
       --otel_to_cloud
   ```
 
+---
+
+## 9. BigQuery AI & Generative AI Functions Skill (`bigquery-ai-functions`)
+The Auditor Agent is equipped with the **BigQuery AI & Generative AI Functions** skill ([`SKILL.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/skills/bigquery-ai-functions/SKILL.md), [`bigquery_ai_functions_skill.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/bigquery_ai_functions_skill.md)).
+
+### Capabilities & Usage Guidelines:
+When auditing and analyzing BigQuery datasets (`agent_telemetry` and `demo.customer_ratings`), the agent can utilize BigQuery's generative and managed AI SQL functions for high-scale, cost-effective telemetry inspection, semantic anomaly classification, and automated rule synthesis:
+
+1. **Managed AI Functions (High-Throughput Primitives):**
+   * `AI.IF(review_text, 'The user describes an urgent safety hazard or defect')`: Natural language filtering of customer feedback.
+   * `AI.SCORE(review_text, 'Customer frustration severity')`: Semantic ranking of negative reviews.
+   * `AI.CLASSIFY(ticket_text, ['Billing', 'Bug Report', 'Return Policy Dispute', 'Shipping Delay'])`: Zero-shot categorization of complaints.
+   * `AI.AGG(notes, 'Summarize primary recurring reasons for negative CSAT')`: Semantic summarization of feedback across sessions.
+
+2. **General-Purpose AI Functions:**
+   * `AI.GENERATE(MODEL, CONCAT('Summarize issue: ', feedback), output_schema => 'STRUCT<issue STRING, severity STRING>')`: Structured JSON extraction directly within BigQuery.
+   * `AI.GENERATE_TEXT`: Bulk prompt processing across conversation records.
+
+3. **Embeddings & Vector Search:**
+   * `AI.GENERATE_EMBEDDING` and `VECTOR_SEARCH`: Semantic similarity matching across historical interaction logs.
+
+The skill is loaded into the agent via ADK 2.0 `SkillToolset` under skill name `bigquery-ai-functions` and accessible via `get_bigquery_ai_skill_instructions` or dynamic skill tools (`load_skill`).
+
+
