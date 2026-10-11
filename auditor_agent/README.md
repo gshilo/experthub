@@ -79,3 +79,10 @@ The Auditor Agent includes the **BigQuery AI & Generative AI Functions** skill:
 * **Toolset:** Registered via Google ADK 2.0 `SkillToolset` and exposed through `get_bigquery_ai_skill_instructions` tool.
 * **Capabilities:** Enables SQL-native generative AI inspection (`AI.GENERATE`, `AI.GENERATE_TEXT`), natural language semantic filtering (`AI.IF`), scoring (`AI.SCORE`), zero-shot classification (`AI.CLASSIFY`), aggregation (`AI.AGG`), and vector embeddings (`AI.GENERATE_EMBEDDING`, `VECTOR_SEARCH`) across telemetry logs and customer feedback in BigQuery.
 
+## 8. ADK Agent Analytics Plugin Skill
+The Auditor Agent includes the **ADK BigQuery Agent Analytics Plugin & Telemetry** skill:
+* **Skill File Location:** [`skills/adk-agent-telemetry/SKILL.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/skills/adk-agent-telemetry/SKILL.md) and [`agent_analytics_plugin_skill.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/agent_analytics_plugin_skill.md)
+* **ADK Skill Identifier:** `adk-agent-telemetry`
+* **Toolset:** Registered via Google ADK 2.0 `SkillToolset` and exposed through `get_agent_analytics_plugin_skill_instructions` tool.
+* **Capabilities:** Enables navigating, querying, and analyzing BigQuery telemetry tables (`agent_events`) and the 25 strongly typed analytical views (`v_*`), inspecting token usage and costs, debugging tool execution failures, correlating pause/resume tool calls, and tracing multi-agent workflow handoffs.
+

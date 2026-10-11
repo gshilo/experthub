@@ -996,6 +996,17 @@ def get_bigquery_ai_skill_instructions() -> str:
     return "BigQuery AI functions skill guide not found."
 
 
+def get_agent_analytics_plugin_skill_instructions() -> str:
+    """Returns the ADK BigQuery Agent Analytics Plugin & Telemetry skill guide for navigating and querying BigQuery analytics tables and views."""
+    skill_file = pathlib.Path(__file__).parent / "agent_analytics_plugin_skill.md"
+    if skill_file.exists():
+        return skill_file.read_text(encoding="utf-8")
+    alt_file = pathlib.Path(__file__).parent / "skills" / "adk-agent-telemetry" / "SKILL.md"
+    if alt_file.exists():
+        return alt_file.read_text(encoding="utf-8")
+    return "ADK Agent Analytics plugin skill guide not found."
+
+
 def get_auditor_skills() -> list:
     """Loads specialized skills for the auditor agent from the local skills directory."""
     skills_dir = pathlib.Path(__file__).parent / "skills"
@@ -1023,8 +1034,12 @@ def get_skill_toolset() -> Optional[Any]:
         return None
 
 
-# Assemble tools including BigQuery AI skill capabilities
-_auditor_tools: list[Any] = [run_audit_pipeline, get_bigquery_ai_skill_instructions]
+# Assemble tools including BigQuery AI and Agent Analytics plugin skill capabilities
+_auditor_tools: list[Any] = [
+    run_audit_pipeline,
+    get_bigquery_ai_skill_instructions,
+    get_agent_analytics_plugin_skill_instructions,
+]
 _skill_toolset = get_skill_toolset()
 if _skill_toolset is not None:
     _auditor_tools.append(_skill_toolset)

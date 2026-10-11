@@ -157,4 +157,22 @@ When auditing and analyzing BigQuery datasets (`agent_telemetry` and `demo.custo
 
 The skill is loaded into the agent via ADK 2.0 `SkillToolset` under skill name `bigquery-ai-functions` and accessible via `get_bigquery_ai_skill_instructions` or dynamic skill tools (`load_skill`).
 
+---
 
+## 10. ADK Agent Analytics Plugin Skill (`adk-agent-telemetry`)
+The Auditor Agent is equipped with the **ADK BigQuery Agent Analytics Plugin & Telemetry** skill ([`SKILL.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/skills/adk-agent-telemetry/SKILL.md), [`agent_analytics_plugin_skill.md`](file:///home/admin_gshilo_altostrat_com/experthub/auditor_agent/agent_analytics_plugin_skill.md)).
+
+### Capabilities & Usage Guidelines:
+When auditing and analyzing BigQuery telemetry datasets (`agent_telemetry.agent_events`), token consumption, tool executions, latency bottlenecks, and multi-agent workflows, the agent navigates, queries, and extracts insights using the ADK BigQuery Agent Analytics plugin data model:
+
+1. **Base Event Sink (`agent_events`)**:
+   * Append-only table partitioned by `DATE(timestamp)` and clustered by `(event_type, agent, user_id)`.
+   * Captures raw payloads (`content`, `attributes`), latency metrics (`latency_ms`), and multimodal references (`content_parts`).
+2. **Analytical Views Catalog (25 strongly typed views)**:
+   * Direct querying of typed columns across `v_user_message_received`, `v_agent_response`, `v_llm_request`, `v_llm_response`, `v_llm_error`, `v_tool_starting`, `v_tool_completed`, `v_tool_error`, `v_tool_paused`, `v_agent_transfer`, `v_state_delta`, and node workflows.
+3. **Trace and Span Correlation**:
+   * OpenTelemetry distributed tracing via `trace_id`, `span_id`, and `parent_span_id`.
+4. **ADK 2.0 Workflow Envelope**:
+   * `attributes.adk` envelope containing graph nodes, agent handoffs, pause/resume correlation keys (`session_id, user_id, function_call_id`), and state checkpoints.
+
+The skill is loaded into the agent via ADK 2.0 `SkillToolset` under skill name `adk-agent-telemetry` and accessible via `get_agent_analytics_plugin_skill_instructions` or dynamic skill tools (`load_skill`, `load_skill_resource`).
