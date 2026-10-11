@@ -1177,9 +1177,10 @@
 
     async function loadAnalyticsData() {
       try {
+        const ts = Date.now();
         const [sumRes, chartRes] = await Promise.all([
-          fetch('/api/analytics/summary').then(r => r.json()),
-          fetch('/api/analytics/charts').then(r => r.json())
+          fetch(`/api/analytics/summary?_=${ts}`, { cache: 'no-store' }).then(r => r.json()),
+          fetch(`/api/analytics/charts?_=${ts}`, { cache: 'no-store' }).then(r => r.json())
         ]);
 
         // Update KPIs

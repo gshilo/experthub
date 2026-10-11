@@ -899,6 +899,16 @@ def index():
     return render_template("index.html")
 
 
+@app.after_request
+def add_cache_control_headers(response):
+    """Ensures responses for API endpoints are never cached by browsers or intermediate proxies."""
+    if request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 @app.route("/health")
 def health():
     """Cloud Run health check endpoint."""
@@ -1105,14 +1115,16 @@ def analytics_summary():
 
     try:
         client = bigquery.Client(project=PROJECT_ID)
+        job_config = bigquery.QueryJobConfig(use_query_cache=False)
         q = f"""
             SELECT COUNT(*) as total, AVG(rating) as avg_score
             FROM `{PROJECT_ID}.demo.customer_ratings`
         """
-        rows = list(client.query(q).result())
-        if rows and rows[0]["total"]:
+        rows = list(client.query(q, job_config=job_config).result())
+        if rows and rows[0]["total"] is not None:
             total_sessions = int(rows[0]["total"])
-            avg_rating = round(float(rows[0]["avg_score"]), 1)
+            if rows[0]["avg_score"] is not None:
+                avg_rating = round(float(rows[0]["avg_score"]), 1)
 
         # Query BigQuery telemetry for average latency
         try:
@@ -1121,7 +1133,7 @@ def analytics_summary():
                 FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
                 WHERE total_ms IS NOT NULL
             """
-            lat_rows = list(client.query(q_lat).result())
+            lat_rows = list(client.query(q_lat, job_config=job_config).result())
             if lat_rows and lat_rows[0]["avg_lat"] is not None:
                 avg_latency = round(float(lat_rows[0]["avg_lat"]), 1)
         except Exception as e:
@@ -1129,12 +1141,14 @@ def analytics_summary():
     except Exception as e:
         logger.info(f"BigQuery summary notice: {e}")
 
-    return jsonify({
+    resp = jsonify({
         "total_sessions": total_sessions,
         "avg_rating": avg_rating,
         "avg_latency_s": avg_latency,
         "token_savings_percent": "28%",
     })
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 @app.route("/api/analytics/charts")
@@ -1155,6 +1169,8 @@ def analytics_charts():
 
     try:
         client = bigquery.Client(project=PROJECT_ID)
+        job_config = bigquery.QueryJobConfig(use_query_cache=False)
+
         # 1. Customer ratings distribution
         q = f"""
             SELECT rating, COUNT(*) as cnt
@@ -1163,7 +1179,7 @@ def analytics_charts():
             ORDER BY rating ASC
         """
         counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
-        for row in client.query(q).result():
+        for row in client.query(q, job_config=job_config).result():
             r = int(row["rating"])
             if 1 <= r <= 5:
                 counts[r] = int(row["cnt"])
@@ -1185,7 +1201,7 @@ def analytics_charts():
                 FROM `{PROJECT_ID}.agent_telemetry.v_tool_completed`
                 GROUP BY tool_name
             """
-            for row in client.query(q_tools).result():
+            for row in client.query(q_tools, job_config=job_config).result():
                 tname = row["tool_name"]
                 if tname in tool_counts:
                     tool_counts[tname] = int(row["cnt"])
@@ -1194,44 +1210,65 @@ def analytics_charts():
         except Exception as e:
             logger.info(f"BigQuery tools view query notice: {e}")
 
-        # 3. Latency timeline from agent_telemetry.v_llm_response
+        # 3. Latency timeline from agent_telemetry.v_llm_response (latest time buckets in chronological order)
         try:
             q_latency = f"""
                 SELECT
-                    FORMAT_TIMESTAMP('%H:%M', timestamp) as time_label,
-                    ROUND(AVG(total_ms) / 1000.0, 2) as avg_s,
-                    ROUND(APPROX_QUANTILES(total_ms / 1000.0, 100)[OFFSET(95)], 2) as p95_s
-                FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
-                WHERE total_ms IS NOT NULL
-                GROUP BY time_label
-                ORDER BY MIN(timestamp) ASC
-                LIMIT 7
+                    bucket_time,
+                    FORMAT_TIMESTAMP('%H:%M', bucket_time) as time_label_hm,
+                    FORMAT_TIMESTAMP('%m/%d %H:%M', bucket_time) as time_label_full,
+                    avg_s,
+                    p95_s
+                FROM (
+                    SELECT
+                        TIMESTAMP_TRUNC(timestamp, MINUTE) as bucket_time,
+                        ROUND(AVG(total_ms) / 1000.0, 2) as avg_s,
+                        ROUND(APPROX_QUANTILES(total_ms / 1000.0, 100)[OFFSET(95)], 2) as p95_s
+                    FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
+                    WHERE total_ms IS NOT NULL
+                    GROUP BY bucket_time
+                    ORDER BY bucket_time DESC
+                    LIMIT 8
+                )
+                ORDER BY bucket_time ASC
             """
-            lat_rows = list(client.query(q_latency).result())
-            if len(lat_rows) >= 2:
-                latency_labels = [r["time_label"] for r in lat_rows]
+            lat_rows = list(client.query(q_latency, job_config=job_config).result())
+            if lat_rows:
+                has_multidays = len(set(r["bucket_time"].date() for r in lat_rows)) > 1
+                latency_labels = [r["time_label_full" if has_multidays else "time_label_hm"] for r in lat_rows]
                 latency_avg = [float(r["avg_s"]) for r in lat_rows]
                 latency_p95 = [float(r["p95_s"]) for r in lat_rows]
         except Exception as e:
             logger.info(f"BigQuery latency view query notice: {e}")
 
-        # 4. Token consumption over time timeline from agent_telemetry.v_llm_response
+        # 4. Token consumption over time timeline from agent_telemetry.v_llm_response (latest time buckets)
         try:
             q_tokens_time = f"""
                 SELECT
-                    FORMAT_TIMESTAMP('%H:%M', timestamp) as time_label,
-                    CAST(SUM(usage_prompt_tokens) AS INT64) as prompt_tokens,
-                    CAST(SUM(usage_completion_tokens) AS INT64) as completion_tokens,
-                    CAST(SUM(COALESCE(usage_total_tokens, usage_prompt_tokens + usage_completion_tokens)) AS INT64) as total_tokens
-                FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
-                WHERE usage_prompt_tokens IS NOT NULL AND usage_completion_tokens IS NOT NULL
-                GROUP BY time_label
-                ORDER BY MIN(timestamp) ASC
-                LIMIT 8
+                    bucket_time,
+                    FORMAT_TIMESTAMP('%H:%M', bucket_time) as time_label_hm,
+                    FORMAT_TIMESTAMP('%m/%d %H:%M', bucket_time) as time_label_full,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens
+                FROM (
+                    SELECT
+                        TIMESTAMP_TRUNC(timestamp, MINUTE) as bucket_time,
+                        CAST(SUM(usage_prompt_tokens) AS INT64) as prompt_tokens,
+                        CAST(SUM(usage_completion_tokens) AS INT64) as completion_tokens,
+                        CAST(SUM(COALESCE(usage_total_tokens, usage_prompt_tokens + usage_completion_tokens)) AS INT64) as total_tokens
+                    FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
+                    WHERE usage_prompt_tokens IS NOT NULL AND usage_completion_tokens IS NOT NULL
+                    GROUP BY bucket_time
+                    ORDER BY bucket_time DESC
+                    LIMIT 8
+                )
+                ORDER BY bucket_time ASC
             """
-            token_time_rows = list(client.query(q_tokens_time).result())
-            if len(token_time_rows) >= 2:
-                tokens_time_labels = [r["time_label"] for r in token_time_rows]
+            token_time_rows = list(client.query(q_tokens_time, job_config=job_config).result())
+            if token_time_rows:
+                has_multidays = len(set(r["bucket_time"].date() for r in token_time_rows)) > 1
+                tokens_time_labels = [r["time_label_full" if has_multidays else "time_label_hm"] for r in token_time_rows]
                 tokens_time_input = [int(r["prompt_tokens"]) for r in token_time_rows]
                 tokens_time_output = [int(r["completion_tokens"]) for r in token_time_rows]
                 tokens_time_total = [int(r["total_tokens"]) for r in token_time_rows]
@@ -1240,18 +1277,40 @@ def analytics_charts():
 
         # 5. Token usage per turn from agent_telemetry.v_llm_response
         try:
-            q_tokens = f"""
+            q_tokens_session = f"""
+                WITH latest_session AS (
+                    SELECT session_id
+                    FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
+                    WHERE session_id IS NOT NULL
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                )
                 SELECT
                     usage_prompt_tokens,
                     usage_completion_tokens
                 FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
-                WHERE usage_prompt_tokens IS NOT NULL AND usage_completion_tokens IS NOT NULL
-                ORDER BY timestamp DESC
-                LIMIT 6
+                WHERE session_id = (SELECT session_id FROM latest_session)
+                  AND usage_prompt_tokens IS NOT NULL 
+                  AND usage_completion_tokens IS NOT NULL
+                ORDER BY timestamp ASC
+                LIMIT 8
             """
-            token_rows = list(client.query(q_tokens).result())
+            token_rows = list(client.query(q_tokens_session, job_config=job_config).result())
+            if not token_rows:
+                q_tokens_fb = f"""
+                    SELECT
+                        usage_prompt_tokens,
+                        usage_completion_tokens
+                    FROM `{PROJECT_ID}.agent_telemetry.v_llm_response`
+                    WHERE usage_prompt_tokens IS NOT NULL AND usage_completion_tokens IS NOT NULL
+                    ORDER BY timestamp DESC
+                    LIMIT 6
+                """
+                token_rows = list(client.query(q_tokens_fb, job_config=job_config).result())
+                if token_rows:
+                    token_rows.reverse()
+
             if token_rows:
-                token_rows.reverse()
                 tokens_labels = [f"Turn {i+1}" for i in range(len(token_rows))]
                 tokens_input = [int(r["usage_prompt_tokens"]) for r in token_rows]
                 tokens_output = [int(r["usage_completion_tokens"]) for r in token_rows]
@@ -1268,7 +1327,7 @@ def analytics_charts():
         "total_tokens": tokens_time_total,
     }
 
-    return jsonify({
+    resp = jsonify({
         "ratings_dist": ratings_dist,
         "latency_timeline": {
             "labels": latency_labels,
@@ -1284,6 +1343,8 @@ def analytics_charts():
         },
         "tools_breakdown": tools_breakdown,
     })
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 if __name__ == "__main__":
