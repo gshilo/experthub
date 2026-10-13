@@ -190,37 +190,53 @@ def query_customer_feedback_analysis_bq(
 ) -> Dict[str, Any]:
     """Pushes down customer feedback AI analysis to BigQuery using AI functions.
 
-    Uses BigQuery AI function `AI.GENERATE` with connection `us.gemini` and endpoint `gemini-3.8-flash`
+    Uses BigQuery managed AI function `AI.IF` for semantic filtering of customer friction,
+    and generative AI function `AI.GENERATE` with connection `us.gemini` and endpoint `gemini-3.8-flash`
     to analyze ratings and customer feedback from `{project_id}.demo.customer_ratings`.
     All AI processing occurs in BigQuery without sending telemetry to Python LLM.
     """
-    logger.info("Executing customer feedback AI pushdown query in BigQuery...")
+    logger.info("Executing customer feedback AI pushdown query in BigQuery (AI.IF + AI.GENERATE)...")
     client = bigquery.Client(project=project_id)
     sql = f"""
-        WITH FeedbackStats AS (
+        WITH FilteredFeedback AS (
+          SELECT
+            customer_name,
+            rating,
+            description,
+            timestamp
+          FROM `{project_id}.demo.customer_ratings`
+          WHERE rating <= 3
+             OR AI.IF(
+               CONCAT("Does this review express negative friction, customer complaint, policy dispute, or product defect? ", description),
+               connection_id => "us.gemini"
+             )
+        ),
+        FeedbackStats AS (
           SELECT
             ROUND(AVG(rating), 2) AS avg_rating,
             COUNTIF(rating <= 3) AS low_ratings_count,
             COUNT(*) AS total_ratings,
-            STRING_AGG(
-              CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
-              "\\n" ORDER BY rating ASC, timestamp DESC
-              LIMIT 15
+            COALESCE(
+              STRING_AGG(
+                CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
+                "\\n" ORDER BY rating ASC, timestamp DESC
+                LIMIT 8
+              ),
+              "No friction or customer complaints found in feedback records."
             ) AS feedback_summary
-          FROM `{project_id}.demo.customer_ratings`
+          FROM FilteredFeedback
         )
         SELECT
-          f.avg_rating,
-          f.low_ratings_count,
-          f.total_ratings,
+          COALESCE(f.avg_rating, 5.0) AS avg_rating,
+          COALESCE(f.low_ratings_count, 0) AS low_ratings_count,
+          COALESCE(f.total_ratings, 0) AS total_ratings,
           res.issues,
           res.candidate_policies
         FROM FeedbackStats f,
         UNNEST([AI.GENERATE(
           CONCAT(
-            "Analyze the following customer service ratings and feedback.\\n",
-            "Identify specific operational issues, negative friction points, and formulate direct policy rules to resolve them.\\n\\n",
-            "Customer Feedback Records:\\n", f.feedback_summary
+            "Analyze these customer service complaints:\\n", f.feedback_summary, "\\n\\n",
+            "Generate JSON with: issues (list of operational problems) and candidate_policies (list of rules to fix each problem)."
           ),
           connection_id => "us.gemini",
           endpoint => "gemini-3.8-flash",
@@ -361,7 +377,7 @@ def _query_telemetry_dialogue_quality_bq(
     max_retries: int = 3,
 ) -> Dict[str, Any]:
     """Stage 2b: Pushes down dialogue quality & sub-optimal answer critique to BigQuery using AI functions."""
-    logger.info("Executing dialogue quality & sub-optimal response AI pushdown query in BigQuery...")
+    logger.info("Executing dialogue quality AI pushdown query in BigQuery (AI.IF + AI.GENERATE)...")
     sql = f"""
         WITH Turns AS (
           SELECT
@@ -388,9 +404,22 @@ def _query_telemetry_dialogue_quality_bq(
           GROUP BY session_id
           HAVING COUNT(*) >= 2
         ),
-        SampleCorpus AS (
-          SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) AS dialogue_samples
+        ProblematicTranscripts AS (
+          SELECT
+            session_id,
+            conversation_transcript
           FROM SessionTranscripts
+          WHERE AI.IF(
+            CONCAT("Does this dialogue contain agent stonewalling, sub-optimal answers, repeated questions, customer complaints, or friction? ", SUBSTR(conversation_transcript, 1, 500)),
+            connection_id => "us.gemini"
+          )
+        ),
+        SampleCorpus AS (
+          SELECT COALESCE(
+            (SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) FROM ProblematicTranscripts),
+            (SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) FROM SessionTranscripts),
+            "No multi-turn dialogue interactions found in telemetry."
+          ) AS dialogue_samples
         )
         SELECT
           res.suboptimal_issues,
@@ -398,10 +427,11 @@ def _query_telemetry_dialogue_quality_bq(
         FROM SampleCorpus s,
         UNNEST([AI.GENERATE(
           CONCAT(
-            "Audit the following real customer service agent multi-turn interaction transcripts from telemetry:\\n\\n",
+            "You are the Lead Quality Auditor. Audit the following real customer service agent multi-turn interaction transcripts from telemetry:\\n\\n",
             COALESCE(s.dialogue_samples, "No dialogue interactions found."), "\\n\\n",
-            "Identify sub-optimal agent answers, policy stonewalling, missed customer needs, repetitive responses, or unhelpful diagnostic hurdles.\\n",
-            "Formulate actionable corrective policy rules for the customer service agent to prevent these issues."
+            "Produce:\\n",
+            "1. 'suboptimal_issues': 3-5 specific sub-optimal agent behaviors, policy stonewalling, missed customer needs, repetitive responses, or unhelpful diagnostic hurdles.\\n",
+            "2. 'quality_policies': 3-5 actionable corrective operational policy rules for the customer service agent to prevent these issues."
           ),
           connection_id => "us.gemini",
           endpoint => "gemini-3.8-flash",
@@ -467,14 +497,17 @@ def _query_telemetry_token_efficiency_bq(
         FROM TelemetrySummary t,
         UNNEST([AI.GENERATE(
           CONCAT(
-            "Analyze the following customer service LLM agent execution telemetry metrics:\\n",
+            "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
             "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
             "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
             "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
             "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
             "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
-            "Sample model completions:\\n", t.sample_responses, "\\n\\n",
-            "Provide actionable token compression recommendations, operational token directives for the agent prompt, and an estimated token savings percentage."
+            "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
+            "Produce:\\n",
+            "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
+            "2. 'token_directives': 2-4 direct operational token directives for the agent system prompt.\\n",
+            "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
           ),
           connection_id => "us.gemini",
           endpoint => "gemini-3.8-flash",
@@ -683,40 +716,75 @@ def format_rule_with_basis(rule_text: str, default_basis: Optional[str] = None) 
 
 
 def optimize_token_efficiency(analysis: Dict[str, Any]) -> Dict[str, Any]:
-    """Sub-Agent 2: Token Efficiency Optimizer."""
-    recommendations = [
-        "Consolidate preliminary hardware troubleshooting instructions into a single bulleted checklist in turn 1 rather than multi-turn sequential inquiries (-35% dialogue turns & tokens).",
-        "Disclose return fee terms (15% restocking fee on opened items) alongside courtesy exchange waiver options upfront to eliminate 4-turn fee disputes (-30% output tokens).",
-        "Automatically trigger carrier terminal trace queries upon reported missing deliveries rather than asking customers to do manual neighborhood sweeps (-25% interaction turns).",
-        "Differentiate authorization holds from captured charges and supply transaction ARN reference letters immediately for billing inquiries (-20% tokens).",
-    ]
+    """Sub-Agent 2: Token Efficiency Optimizer.
 
-    token_directives = [
-        format_rule_with_basis("Omit pleasantry preambles after turn 1 in multi-turn dialogues.", "Agent Metrics"),
-        format_rule_with_basis("Consolidate error code diagnostic steps into a single 3-point checklist under 45 words.", "Agent Metrics"),
-        format_rule_with_basis("State 30-day return policy, 15% restocking fee, and exchange waiver options upfront.", "Customer Feedback"),
-        format_rule_with_basis("For delivery discrepancies, open carrier trace ticket immediately without speculative delays.", "Customer Feedback"),
-    ]
-
+    Dynamically extracts token recommendations, directives, and savings percentage
+    from telemetry analysis without hardcoded strings.
+    """
     return {
-        "token_recommendations": recommendations,
-        "token_directives": token_directives,
-        "estimated_savings_percent": "32%",
+        "token_recommendations": list(analysis.get("token_recommendations", [])),
+        "token_directives": [
+            format_rule_with_basis(d, "Agent Metrics")
+            for d in analysis.get("token_directives", [])
+        ],
+        "estimated_savings_percent": str(analysis.get("estimated_savings_percent", "35%")),
     }
 
 
 def generate_initial_okf_rules(analysis: Dict[str, Any], token_opt: Dict[str, Any]) -> str:
-    """Sub-Agent 3: OKF Rule Author - generates initial baseline OKF document with rule source indications."""
+    """Sub-Agent 3: OKF Rule Author - generates dynamic initial OKF document from BigQuery AI pushdown findings."""
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    directives_bullets = "\n".join(f"- {format_rule_with_basis(d)}" for d in token_opt.get("token_directives", []))
-    
+    directives_list = [
+        format_rule_with_basis(d, "Agent Metrics")
+        for d in token_opt.get("token_directives", [])
+    ]
+    if not directives_list:
+        directives_list = [
+            format_rule_with_basis("Provide direct, concise resolutions without conversational filler or redundant preamble.", "Agent Metrics")
+        ]
+    directives_bullets = "\n".join(f"- {d}" for d in directives_list)
+
     all_issues = []
     if analysis.get("detected_issues"):
-        all_issues.extend(analysis["detected_issues"][:2])
+        all_issues.extend(analysis["detected_issues"])
     if token_opt.get("telemetry_issues"):
-        all_issues.extend(token_opt["telemetry_issues"][:2])
-    issues_summary = "; ".join(all_issues) if all_issues else "Continuous operational telemetry and feedback monitored."
+        all_issues.extend(token_opt["telemetry_issues"])
+    if token_opt.get("suboptimal_issues"):
+        for sub_issue in token_opt["suboptimal_issues"]:
+            if sub_issue not in all_issues:
+                all_issues.append(sub_issue)
+
+    issues_bullets = "\n".join(f"- {issue}" for issue in all_issues) if all_issues else "- Continuous operational telemetry and feedback monitored."
+
+    # Assemble dynamic policies purely from BigQuery AI pushdown findings
+    policy_rules: List[str] = []
+    for p in analysis.get("candidate_policies", []):
+        formatted_p = format_rule_with_basis(p, "Customer Feedback")
+        if formatted_p not in policy_rules:
+            policy_rules.append(formatted_p)
+
+    for p in token_opt.get("candidate_policies", []):
+        formatted_p = format_rule_with_basis(p, "Agent Metrics")
+        if formatted_p not in policy_rules:
+            policy_rules.append(formatted_p)
+
+    for p in token_opt.get("quality_policies", []):
+        formatted_p = format_rule_with_basis(p, "Agent Metrics")
+        if formatted_p not in policy_rules:
+            policy_rules.append(formatted_p)
+
+    for p in token_opt.get("error_guardrails", []):
+        formatted_p = format_rule_with_basis(p, "Agent Metrics")
+        if formatted_p not in policy_rules:
+            policy_rules.append(formatted_p)
+
+    if not policy_rules:
+        policy_rules = [
+            format_rule_with_basis("Prioritize first-contact resolution and eliminate rigid gatekeeping protocols during customer disputes.", "Customer Feedback")
+        ]
+
+    policy_lines = "\n".join(f"{idx + 1}. {rule}" for idx, rule in enumerate(policy_rules))
 
     okf_document = f"""---
 type: Operational Rule
@@ -736,21 +804,14 @@ sources:
 ---
 
 # Definition
-Telemetry and customer sentiment analysis identified operational issues and friction regarding multi-turn diagnostic delays, restocking fee surprises, and carrier delivery discrepancies:
-{issues_summary}
+Telemetry and customer sentiment analysis identified operational issues and friction points:
+{issues_bullets}
 
 # Policy
-1. [Based on: Customer Feedback] For Refrigerator Error 22E: Direct customer to inspect upper evaporator fan for frost obstruction and verify the door seal. Offer next-day warranty dispatch if frost persists.
-2. [Based on: Customer Feedback] For Washing Machine Vibration: Verify rear shipping transit bolts are removed prior to considering mechanical motor overload.
-3. [Based on: Customer Feedback] For TV eARC / Audio Dropouts: Instruct customer to set 'Digital Sound Output' to 'Pass Through' and disable 'AMD FreeSync Premium' on PC inputs to eliminate G-Sync EDID conflicts.
-4. [Based on: Customer Feedback] For Returns & Restocking Fees: State the 30-day window and 15% restocking fee on opened non-defective goods, and proactively present courtesy exchange fee waivers.
-5. [Based on: Customer Feedback] For Missing Deliveries Marked Delivered: Require formal 24-48h carrier trace investigation before issuing replacement or refund.
-6. [Based on: Customer Feedback] For Payment Disputes: Clarify pre-authorization holds vs settled captures and issue formal Bank Release Authorization Letters (ARN).
-7. [Based on: Agent Metrics] For Tool Invocation & Latency: Restrict sequential tool lookups to at most 2 per dialogue turn to maintain p95 response latency under 3.5s.
-8. [Based on: Agent Metrics] For Diagnostic Conciseness & Token Budget: Limit technical triage responses to under 60 words to reduce prompt/completion overhead and maintain turn response latency under 2.5s.
+{policy_lines}
 
 # Token Optimization Directive
-To reduce multi-turn token consumption by {token_opt.get('estimated_savings_percent', '32%')} while accelerating resolution latency:
+To reduce multi-turn token consumption by {token_opt.get('estimated_savings_percent', '35%')} while accelerating resolution latency:
 {directives_bullets}
 """
     return okf_document
@@ -796,102 +857,181 @@ def get_candidate_new_rules(
     analysis: Dict[str, Any],
     token_opt: Dict[str, Any],
 ) -> Tuple[List[str], List[str]]:
-    """Synthesizes candidate policy rules and token directives with source basis indications."""
+    """Synthesizes candidate policy rules and token directives purely from BigQuery AI pushdown."""
     candidate_policies: List[str] = []
 
-    # 1. Incorporate dynamically synthesized policies from customer feedback AI pushdown
+    # 1. Dynamically synthesized policies from customer feedback AI pushdown
     for p in analysis.get("candidate_policies", []):
         formatted_p = format_rule_with_basis(p, "Customer Feedback")
         if formatted_p not in candidate_policies:
             candidate_policies.append(formatted_p)
 
-    # 1b. Incorporate dynamically synthesized policies from agent telemetry (error guardrails & sub-optimal response corrections)
+    # 2. Dynamically synthesized policies from agent telemetry (error guardrails & sub-optimal response corrections)
     for p in token_opt.get("candidate_policies", []):
         formatted_p = format_rule_with_basis(p, "Agent Metrics")
         if formatted_p not in candidate_policies:
             candidate_policies.append(formatted_p)
 
-    # 2. Baseline candidate policy rules
-    baseline_policies = [
-        format_rule_with_basis("For Refrigerator Error 22E: Direct customer to inspect upper evaporator fan for frost obstruction and verify the door seal. Offer next-day warranty dispatch if frost persists.", "Customer Feedback"),
-        format_rule_with_basis("For Washing Machine Vibration: Verify rear shipping transit bolts are removed prior to considering mechanical motor overload.", "Customer Feedback"),
-        format_rule_with_basis("For TV eARC / Audio Dropouts: Instruct customer to set 'Digital Sound Output' to 'Pass Through' and disable 'AMD FreeSync Premium' on PC inputs to eliminate G-Sync EDID conflicts.", "Customer Feedback"),
-        format_rule_with_basis("For Returns & Restocking Fees: State the 30-day window and 15% restocking fee on opened non-defective goods, and proactively present courtesy exchange fee waivers.", "Customer Feedback"),
-        format_rule_with_basis("For Missing Deliveries Marked Delivered: Require formal 24-48h carrier trace investigation before issuing replacement or refund.", "Customer Feedback"),
-        format_rule_with_basis("For Payment Disputes: Clarify pre-authorization holds vs settled captures and issue formal Bank Release Authorization Letters (ARN).", "Customer Feedback"),
-        format_rule_with_basis("For Warehouse Quarantine & Return Delays: Proactively notify customer within 48 hours of parcel arrival if an item requires quarantine inspection, and offer courtesy expedited exchange.", "Customer Feedback"),
-        format_rule_with_basis("For Coffee Machines & Small Appliance Faults: Guide customer through pump prime and descale cycles before initiating service center RMA.", "Customer Feedback"),
-        format_rule_with_basis("For Stalled Delivery Scans & Address Exceptions: Initiate direct carrier station trace within 24h of exception notification and waive redelivery surcharge.", "Customer Feedback"),
-        format_rule_with_basis("For Smart Appliance Connectivity & Wi-Fi Pairing: Advise switching router frequency to 2.4GHz and disabling mesh band steering during initial equipment pairing.", "Customer Feedback"),
-        format_rule_with_basis("For Tool Invocation & Latency: Restrict sequential tool lookups to at most 2 per dialogue turn to maintain p95 response latency under 3.5s.", "Agent Metrics"),
-        format_rule_with_basis("For Diagnostic Conciseness & Token Budget: Limit technical triage responses to under 60 words to reduce prompt/completion overhead and maintain turn response latency under 2.5s.", "Agent Metrics"),
-        format_rule_with_basis("For Parallel Data Retrieval: Batch order status and tracking queries into a single retrieval step to minimize agent execution duration.", "Agent Metrics"),
-    ]
-    for bp in baseline_policies:
-        if bp not in candidate_policies:
-            candidate_policies.append(bp)
+    for p in token_opt.get("quality_policies", []):
+        formatted_p = format_rule_with_basis(p, "Agent Metrics")
+        if formatted_p not in candidate_policies:
+            candidate_policies.append(formatted_p)
 
-    # 3. Dynamically derive rules from detected BigQuery feedback observations
-    detected = " ".join(analysis.get("detected_issues", [])).lower()
-    if "quarantine" in detected or "warehouse" in detected:
-        cand = format_rule_with_basis("For Warehouse Quarantine & Return Inspection Delays: Automatically trigger inventory release follow-up after 5 business days and offer courtesy voucher for delayed return processing.", "Customer Feedback")
-        if cand not in candidate_policies:
-            candidate_policies.append(cand)
-    if "carrier" in detected or "transit" in detected or "fedex" in detected:
-        cand = format_rule_with_basis("For Carrier Dispatch & Tracking Inquiries: Provide real-time carrier trace confirmation ticket within the dialogue turn.", "Customer Feedback")
-        if cand not in candidate_policies:
-            candidate_policies.append(cand)
-    if "authorization" in detected or "double" in detected or "bank" in detected:
-        cand = format_rule_with_basis("For Double Authorization Concerns: Distinguish authorization pre-holds from captured charges immediately and issue customer bank letters.", "Customer Feedback")
-        if cand not in candidate_policies:
-            candidate_policies.append(cand)
+    for p in token_opt.get("error_guardrails", []):
+        formatted_p = format_rule_with_basis(p, "Agent Metrics")
+        if formatted_p not in candidate_policies:
+            candidate_policies.append(formatted_p)
 
-    # 4. Directives from BigQuery AI pushdown and baselines
+    # 3. Directives from BigQuery AI pushdown token efficiency
     candidate_directives: List[str] = []
     for d in token_opt.get("token_directives", []):
         formatted_d = format_rule_with_basis(d, "Agent Metrics")
         if formatted_d not in candidate_directives:
             candidate_directives.append(formatted_d)
 
-    additional_directives = [
-        format_rule_with_basis("Omit pleasantry preambles after turn 1 in multi-turn dialogues.", "Agent Metrics"),
-        format_rule_with_basis("Consolidate error code diagnostic steps into a single 3-point checklist under 45 words.", "Agent Metrics"),
-        format_rule_with_basis("State 30-day return policy, 15% restocking fee, and exchange waiver options upfront.", "Customer Feedback"),
-        format_rule_with_basis("For delivery discrepancies, open carrier trace ticket immediately without speculative delays.", "Customer Feedback"),
-        format_rule_with_basis("Omit redundant policy disclaimers after initial statement in multi-turn dialogues.", "Agent Metrics"),
-        format_rule_with_basis("Provide single-line direct answers for order tracking and tracking URL lookups.", "Agent Metrics"),
-        format_rule_with_basis("Eliminate multi-turn diagnostic preambles when technical fault code is already identified.", "Agent Metrics"),
-    ]
-    for d in additional_directives:
-        if d not in candidate_directives:
-            candidate_directives.append(d)
-
     return candidate_policies, candidate_directives
 
 
-def rule_already_present(candidate: str, existing_rules: List[Tuple[int, str]]) -> bool:
-    """Checks if candidate rule topic is already covered by existing policy rules."""
-    cand_clean = normalize_rule_text(candidate)
-    cand_norm = cand_clean.strip().lower()
-    cand_prefix = cand_norm.split(":")[0].strip() if ":" in cand_norm else cand_norm[:35]
-    for _, ex in existing_rules:
-        ex_clean = normalize_rule_text(ex)
-        ex_norm = ex_clean.strip().lower()
-        ex_prefix = ex_norm.split(":")[0].strip() if ":" in ex_norm else ex_norm[:35]
-        if cand_prefix == ex_prefix or cand_prefix in ex_norm or ex_prefix in cand_norm:
+LEGACY_HARDCODED_PATTERNS = [
+    r"refrigerator\s+error\s+22e",
+    r"washing\s+machine\s+vibration",
+    r"shipping\s+transit\s+bolts",
+    r"tv\s+earc",
+    r"audio\s+dropouts",
+    r"digital\s+sound\s+output",
+    r"freesync\s+premium",
+    r"30-day\s+(window|return\s+policy)",
+    r"15%\s+restocking\s+fee",
+    r"missing\s+deliveries\s+marked\s+delivered",
+    r"formal\s+24-48h\s+carrier\s+trace",
+    r"pre-authorization\s+holds\s+vs\s+settled\s+captures",
+    r"bank\s+release\s+authorization\s+letters",
+    r"warehouse\s+quarantine",
+    r"coffee\s+machines\s+&\s+small\s+appliance",
+    r"pump\s+prime\s+and\s+descale\s+cycles",
+    r"stalled\s+delivery\s+scans",
+    r"smart\s+appliance\s+connectivity",
+    r"router\s+frequency\s+to\s+2\.4ghz",
+    r"restrict\s+sequential\s+tool\s+lookups\s+to\s+at\s+most\s+2",
+    r"limit\s+technical\s+triage\s+responses\s+to\s+under\s+60\s+words",
+    r"batch\s+order\s+status\s+and\s+tracking\s+queries",
+    r"omit\s+pleasantry\s+preambles\s+after\s+turn\s+1",
+    r"single\s+3-point\s+checklist\s+under\s+45\s+words",
+    r"omit\s+redundant\s+policy\s+disclaimers",
+    r"single-line\s+direct\s+answers\s+for\s+order\s+tracking",
+    r"eliminate\s+multi-turn\s+diagnostic\s+preambles",
+]
+
+
+def is_legacy_hardcoded_rule(text: str) -> bool:
+    """Checks whether text matches any of the legacy hardcoded rule templates."""
+    clean = normalize_rule_text(text).lower()
+    for pat in LEGACY_HARDCODED_PATTERNS:
+        if re.search(pat, clean, flags=re.IGNORECASE):
             return True
     return False
 
 
-def directive_already_present(candidate: str, existing_directives: List[str]) -> bool:
-    """Checks if candidate directive is already covered by existing token directives."""
+def purge_legacy_hardcoded_rules(content: str) -> str:
+    """Purges known legacy hardcoded templates from an existing OKF markdown document and re-numbers policies."""
+    lines = content.splitlines()
+    cleaned_lines: List[str] = []
+    current_sec = None
+    policy_counter = 1
+
+    for line in lines:
+        line_s = line.strip()
+        if line_s.startswith("# Policy"):
+            current_sec = "policy"
+            cleaned_lines.append(line)
+            continue
+        elif line_s.startswith("# Token Optimization Directive"):
+            current_sec = "token"
+            cleaned_lines.append(line)
+            continue
+        elif line_s.startswith("# ") and current_sec:
+            current_sec = None
+
+        if current_sec == "policy":
+            m = re.match(r"^\s*(\d+)[\.\)]\s*(.+)$", line)
+            if m:
+                p_text = m.group(2).strip()
+                if is_legacy_hardcoded_rule(p_text):
+                    logger.info(f"Purging legacy hardcoded policy rule: {p_text}")
+                    continue
+                cleaned_lines.append(f"{policy_counter}. {p_text}")
+                policy_counter += 1
+                continue
+            elif line_s.startswith("- ") or line_s.startswith("* "):
+                p_text = line_s[2:].strip()
+                if is_legacy_hardcoded_rule(p_text):
+                    logger.info(f"Purging legacy hardcoded policy bullet: {p_text}")
+                    continue
+                cleaned_lines.append(f"{policy_counter}. {p_text}")
+                policy_counter += 1
+                continue
+        elif current_sec == "token":
+            if line_s.startswith("- ") or line_s.startswith("* "):
+                d_text = line_s[2:].strip()
+                if is_legacy_hardcoded_rule(d_text):
+                    logger.info(f"Purging legacy hardcoded token directive: {d_text}")
+                    continue
+                cleaned_lines.append(f"- {d_text}")
+                continue
+
+        cleaned_lines.append(line)
+
+    result = "\n".join(cleaned_lines)
+    if not result.endswith("\n"):
+        result += "\n"
+    return result
+
+
+def extract_keywords(text: str) -> set:
+    """Extracts significant keywords for semantic overlap comparison."""
+    stopwords = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+        "by", "from", "up", "about", "into", "over", "after", "is", "are", "was", "were",
+        "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could",
+        "will", "would", "shall", "should", "may", "might", "must", "that", "this", "these",
+        "those", "based", "source", "basis", "customer", "feedback", "agent", "metrics",
+        "turn", "dialogue", "response", "when", "then", "their", "them", "they", "your"
+    }
+    cleaned = re.sub(r"[^\w\s]", " ", text.lower())
+    return {w for w in cleaned.split() if len(w) > 2 and w not in stopwords}
+
+
+def compute_similarity(text1: str, text2: str) -> float:
+    """Computes Jaccard keyword overlap similarity between two rule strings."""
+    kw1 = extract_keywords(text1)
+    kw2 = extract_keywords(text2)
+    if not kw1 or not kw2:
+        return 0.0
+    intersection = kw1.intersection(kw2)
+    union = kw1.union(kw2)
+    return len(intersection) / len(union)
+
+
+def rule_already_present(candidate: str, existing_rules: List[Tuple[int, str]], threshold: float = 0.50) -> bool:
+    """Checks if candidate rule topic is already covered by existing policy rules using token similarity."""
     cand_clean = normalize_rule_text(candidate)
-    cand_norm = cand_clean.strip().lower()
-    cand_core = cand_norm[:30]
+    for _, ex in existing_rules:
+        ex_clean = normalize_rule_text(ex)
+        if cand_clean.lower() == ex_clean.lower():
+            return True
+        if compute_similarity(cand_clean, ex_clean) >= threshold:
+            return True
+    return False
+
+
+def directive_already_present(candidate: str, existing_directives: List[str], threshold: float = 0.50) -> bool:
+    """Checks if candidate directive is already covered by existing token directives using token similarity."""
+    cand_clean = normalize_rule_text(candidate)
     for ex in existing_directives:
         ex_clean = normalize_rule_text(ex)
-        ex_norm = ex_clean.strip().lower()
-        if cand_core in ex_norm or ex_norm[:30] in cand_norm:
+        if cand_clean.lower() == ex_clean.lower():
+            return True
+        if compute_similarity(cand_clean, ex_clean) >= threshold:
             return True
     return False
 
@@ -901,14 +1041,16 @@ def merge_and_append_new_rules(
     analysis: Dict[str, Any],
     token_opt: Dict[str, Any],
 ) -> Tuple[str, List[str], List[str]]:
-    """Keeps all existing rules in the dynamic context file, ensures source indications, and appends new rules.
+    """Keeps existing dynamic rules, purges legacy hardcoded rules, ensures source indications, and appends new rules.
 
     Returns (updated_markdown_content, new_policies_added, new_directives_added).
     """
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines = existing_content.splitlines()
 
-    existing_policies, existing_directives = parse_policies_and_directives(existing_content)
+    # Step 1: Purge any legacy hardcoded rules from existing content
+    cleaned_existing = purge_legacy_hardcoded_rules(existing_content)
+
+    existing_policies, existing_directives = parse_policies_and_directives(cleaned_existing)
     candidate_policies, candidate_directives = get_candidate_new_rules(analysis, token_opt)
 
     new_policies_to_add: List[str] = []
@@ -921,11 +1063,12 @@ def merge_and_append_new_rules(
         if not directive_already_present(d, existing_directives) and not directive_already_present(d, new_directives_to_add):
             new_directives_to_add.append(format_rule_with_basis(d))
 
-    # If document has no existing rules, initialize full template
+    # If document has no existing rules, initialize full dynamic template
     if not existing_policies and not existing_directives:
         initial = generate_initial_okf_rules(analysis, token_opt)
         return initial, candidate_policies, candidate_directives
 
+    lines = cleaned_existing.splitlines()
     policy_last_idx = -1
     token_last_idx = -1
     current_sec = None
