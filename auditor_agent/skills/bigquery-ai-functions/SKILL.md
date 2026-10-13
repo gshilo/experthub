@@ -73,9 +73,19 @@ OPTIONS (
 ## 3. General-Purpose AI Functions
 
 ### 3.1 `AI.GENERATE` (Flexible Inference & Multimodal)
-Takes a string, struct, or `ObjectRef` (GCS objects) and returns a struct containing `result`, `full_response`, and `status`.
+Takes a string, struct, or `ObjectRef` (GCS objects) and returns a struct containing `result`, `full_response`, and `status` (or custom typed fields if `output_schema` is supplied).
 
-#### Basic Text Prompt:
+#### Direct Connection & Model Endpoint Invocation (No CREATE MODEL needed):
+```sql
+SELECT AI.GENERATE(
+  'Summarize customer issues and propose policies',
+  connection_id => 'us.gemini',
+  endpoint => 'gemini-3.8-flash',
+  output_schema => 'issues ARRAY<STRING>, candidate_policies ARRAY<STRING>'
+);
+```
+
+#### Basic Text Prompt (using Model reference):
 ```sql
 SELECT
   id,
@@ -87,16 +97,20 @@ FROM `my_dataset.support_tickets`;
 ```
 
 #### Structured Output via `output_schema`:
-Extract entities into a typed struct:
+Extract entities into typed columns:
 ```sql
 SELECT
   id,
-  AI.GENERATE(
-    MODEL `my_dataset.gemini_model`,
-    CONCAT('Extract the customer name, sentiment, and action items: ', ticket_text),
-    output_schema => 'STRUCT<customer_name STRING, sentiment STRING, action_items ARRAY<STRING>>'
-  ).result AS parsed_output
-FROM `my_dataset.support_tickets`;
+  res.customer_name,
+  res.sentiment,
+  res.action_items
+FROM `my_dataset.support_tickets`,
+UNNEST([AI.GENERATE(
+  CONCAT('Extract the customer name, sentiment, and action items: ', ticket_text),
+  connection_id => 'us.gemini',
+  endpoint => 'gemini-3.8-flash',
+  output_schema => 'customer_name STRING, sentiment STRING, action_items ARRAY<STRING>'
+)]) AS res;
 ```
 
 #### Multimodal Input with `OBJ.MAKE_REF`:
