@@ -2271,12 +2271,14 @@ CRITICAL RULES:
    - Sort by `time_bucket ASC`.
    - `chart_type` should be 'line'.
    - `is_time_series` must be true.
+   - `target_sentiment`: 'positive' if asking specifically about positive feedback/satisfaction/praise, 'negative' if asking specifically about negative feedback/complaints/detractors, 'neutral' if asking specifically about neutral feedback, or 'all' if asking about overall sentiment/satisfaction or both.
 2. Return ONLY a JSON object conforming to this schema (no markdown, no backticks):
 {{
   "is_time_series": true,
   "time_bucket": "DAY",
   "chart_type": "line",
   "title": "Short descriptive title",
+  "target_sentiment": "positive",
   "ai_functions": ["AI.CLASSIFY"],
   "sql": "SELECT ..."
 }}
@@ -2659,6 +2661,23 @@ def process_customer_analysis_query(
                 "query_record": query_record,
             }
 
+        # Determine sentiment focus from question and dynamic gen
+        q_words = set(re.findall(r"\b[a-zA-Z]+\b", q_lower))
+        has_positive = bool({"positive", "favorable", "praise", "positives"}.intersection(q_words)) or "positive feedback" in q_lower or "positive sentiment" in q_lower
+        has_negative = bool({"negative", "unfavorable", "complaint", "complaints", "negatives", "detractor", "detractors"}.intersection(q_words)) or "negative feedback" in q_lower or "negative sentiment" in q_lower
+        has_neutral = bool({"neutral", "neutrals"}.intersection(q_words)) or "neutral feedback" in q_lower or "neutral sentiment" in q_lower
+
+        if has_positive and not has_negative and not has_neutral:
+            sentiment_target = "positive"
+        elif has_negative and not has_positive and not has_neutral:
+            sentiment_target = "negative"
+        elif has_neutral and not has_positive and not has_negative:
+            sentiment_target = "neutral"
+        elif dynamic_gen and dynamic_gen.get("target_sentiment") in ["positive", "negative", "neutral", "all"]:
+            sentiment_target = dynamic_gen["target_sentiment"]
+        else:
+            sentiment_target = "all"
+
         # Format time-series rows
         labels: List[str] = []
         pos_pcts: List[float] = []
@@ -2667,6 +2686,8 @@ def process_customer_analysis_query(
         table_rows: List[List[Any]] = []
         total_volume = 0
         total_pos = 0
+        total_neu = 0
+        total_neg = 0
         total_rating_weighted = 0.0
 
         for r in rows:
@@ -2691,6 +2712,8 @@ def process_customer_analysis_query(
             neg_pcts.append(ng_pct)
             total_volume += cnt
             total_pos += p_cnt
+            total_neu += n_cnt
+            total_neg += ng_cnt
             total_rating_weighted += csat * cnt
 
             table_rows.append([
@@ -2703,59 +2726,131 @@ def process_customer_analysis_query(
             ])
 
         overall_pos_pct = round(100.0 * total_pos / max(1, total_volume), 1)
+        overall_neu_pct = round(100.0 * total_neu / max(1, total_volume), 1)
+        overall_neg_pct = round(100.0 * total_neg / max(1, total_volume), 1)
         avg_csat_overall = round(total_rating_weighted / max(1, total_volume), 2)
+        grain_label = "hourly" if time_bucket == "HOUR" else "daily"
 
-        if len(pos_pcts) >= 2:
-            diff = pos_pcts[-1] - pos_pcts[0]
-            sign = "+" if diff >= 0 else ""
-            trend_text = f"{sign}{diff:.1f}% period change"
-        else:
-            trend_text = "Baseline period"
-
-        metric_1 = {
-            "label": "Overall Positive Sentiment",
-            "value": f"{overall_pos_pct}%",
-            "subtext": trend_text
+        pos_dataset = {
+            "label": "Positive Sentiment (%)",
+            "data": pos_pcts,
+            "borderColor": "#10b981",
+            "backgroundColor": "rgba(16, 185, 129, 0.15)",
+            "borderWidth": 2.5,
+            "tension": 0.3,
+            "fill": False
         }
+        neu_dataset = {
+            "label": "Neutral Sentiment (%)",
+            "data": neu_pcts,
+            "borderColor": "#f59e0b",
+            "backgroundColor": "rgba(245, 158, 11, 0.15)",
+            "borderWidth": 2.5,
+            "tension": 0.3,
+            "fill": False
+        }
+        neg_dataset = {
+            "label": "Negative Sentiment (%)",
+            "data": neg_pcts,
+            "borderColor": "#f43f5e",
+            "backgroundColor": "rgba(244, 63, 94, 0.15)",
+            "borderWidth": 2.5,
+            "tension": 0.3,
+            "fill": False
+        }
+
+        if sentiment_target == "positive":
+            chart_datasets = [pos_dataset]
+            if len(pos_pcts) >= 2:
+                diff = pos_pcts[-1] - pos_pcts[0]
+                sign = "+" if diff >= 0 else ""
+                trend_text = f"{sign}{diff:.1f}% period change"
+            else:
+                trend_text = "Baseline period"
+
+            metric_1 = {
+                "label": "Overall Positive Sentiment",
+                "value": f"{overall_pos_pct}%",
+                "subtext": trend_text
+            }
+            chart_title = f"Positive Customer Feedback Percentage Over Time ({grain_label})"
+            summary_text = (
+                f"BigQuery AI pushdown assigned sentiment to each interaction using AI.CLASSIFY across {total_volume} "
+                f"customer interaction records, aggregating positive feedback percentages by {grain_label}. "
+                f"Overall positive customer feedback is {overall_pos_pct}% (avg CSAT: {avg_csat_overall}/5.0) with a {trend_text.lower()}."
+            )
+        elif sentiment_target == "negative":
+            chart_datasets = [neg_dataset]
+            if len(neg_pcts) >= 2:
+                diff = neg_pcts[-1] - neg_pcts[0]
+                sign = "+" if diff >= 0 else ""
+                trend_text = f"{sign}{diff:.1f}% period change"
+            else:
+                trend_text = "Baseline period"
+
+            metric_1 = {
+                "label": "Overall Negative Sentiment",
+                "value": f"{overall_neg_pct}%",
+                "subtext": trend_text
+            }
+            chart_title = f"Negative Customer Feedback Percentage Over Time ({grain_label})"
+            summary_text = (
+                f"BigQuery AI pushdown assigned sentiment to each interaction using AI.CLASSIFY across {total_volume} "
+                f"customer interaction records, aggregating negative feedback percentages by {grain_label}. "
+                f"Overall negative customer feedback is {overall_neg_pct}% (avg CSAT: {avg_csat_overall}/5.0) with a {trend_text.lower()}."
+            )
+        elif sentiment_target == "neutral":
+            chart_datasets = [neu_dataset]
+            if len(neu_pcts) >= 2:
+                diff = neu_pcts[-1] - neu_pcts[0]
+                sign = "+" if diff >= 0 else ""
+                trend_text = f"{sign}{diff:.1f}% period change"
+            else:
+                trend_text = "Baseline period"
+
+            metric_1 = {
+                "label": "Overall Neutral Sentiment",
+                "value": f"{overall_neu_pct}%",
+                "subtext": trend_text
+            }
+            chart_title = f"Neutral Customer Feedback Percentage Over Time ({grain_label})"
+            summary_text = (
+                f"BigQuery AI pushdown assigned sentiment to each interaction using AI.CLASSIFY across {total_volume} "
+                f"customer interaction records, aggregating neutral feedback percentages by {grain_label}. "
+                f"Overall neutral customer feedback is {overall_neu_pct}% (avg CSAT: {avg_csat_overall}/5.0) with a {trend_text.lower()}."
+            )
+        else:
+            chart_datasets = [pos_dataset, neu_dataset, neg_dataset]
+            if len(pos_pcts) >= 2:
+                diff = pos_pcts[-1] - pos_pcts[0]
+                sign = "+" if diff >= 0 else ""
+                trend_text = f"{sign}{diff:.1f}% positive period change"
+            else:
+                trend_text = "Baseline period"
+
+            metric_1 = {
+                "label": "Overall Positive Sentiment",
+                "value": f"{overall_pos_pct}%",
+                "subtext": trend_text
+            }
+            chart_title = f"Customer Sentiment Trends Over Time ({grain_label})"
+            summary_text = (
+                f"BigQuery AI pushdown assigned sentiment to each interaction using AI.CLASSIFY across {total_volume} "
+                f"customer interaction records, aggregating sentiment percentages by {grain_label}. "
+                f"Overall positive sentiment is {overall_pos_pct}%, neutral is {overall_neu_pct}%, and negative is {overall_neg_pct}% (avg CSAT: {avg_csat_overall}/5.0)."
+            )
+
         metric_2 = {
             "label": "Average CSAT Rating",
             "value": f"{avg_csat_overall} / 5.0",
             "subtext": f"{total_volume} total interactions analyzed"
         }
-        grain_label = "hourly" if time_bucket == "HOUR" else "daily"
 
         metric_3 = {
             "label": "Pushdown AI Engine",
             "value": "AI.CLASSIFY",
             "subtext": f"Granularity: {grain_label} time buckets"
         }
-
-        summary_text = (
-            f"BigQuery AI pushdown assigned sentiment to each interaction using AI.CLASSIFY across {total_volume} "
-            f"customer interaction records, aggregating sentiment percentages by {grain_label}. "
-            f"Overall positive sentiment is {overall_pos_pct}% (avg CSAT: {avg_csat_overall}/5.0) with a {trend_text.lower()}."
-        )
-
-        chart_datasets = [
-            {
-                "label": "Positive Sentiment (%)",
-                "data": pos_pcts,
-                "borderColor": "#10b981",
-                "backgroundColor": "rgba(16, 185, 129, 0.15)",
-                "borderWidth": 2.5,
-                "tension": 0.3,
-                "fill": False
-            },
-            {
-                "label": "Negative Sentiment (%)",
-                "data": neg_pcts,
-                "borderColor": "#f43f5e",
-                "backgroundColor": "rgba(244, 63, 94, 0.15)",
-                "borderWidth": 2.5,
-                "tension": 0.3,
-                "fill": False
-            }
-        ]
 
         components = [
             {

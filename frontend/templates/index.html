@@ -2485,7 +2485,7 @@
                 maintainAspectRatio: false,
                 plugins: {
                   legend: {
-                    display: isDoughnut || (p.datasets && p.datasets.length > 1),
+                    display: isDoughnut || isLine || (p.datasets && p.datasets.length > 1),
                     position: isDoughnut ? 'bottom' : 'top',
                     labels: { color: '#94a3b8', font: { size: 11 } }
                   },
