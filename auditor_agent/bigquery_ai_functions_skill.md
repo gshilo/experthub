@@ -1,257 +1,180 @@
-# Skill: BigQuery AI & Generative AI Functions
+---
+name: bigquery-ai-functions
+description: Use when calling Gemini, TimesFM, TabFM, or embedding models directly from BigQuery SQL via AI.* and ML.* functions. Covers text/structured generation, managed filtering/scoring/classification/aggregation, embeddings, semantic/hybrid search, zero-shot forecasting, anomaly detection, tabular prediction, and multimodal document processing.
+---
 
-## Description
-A comprehensive guide for agents to write, inspect, and optimize SQL queries using Google BigQuery's generative AI, managed AI, and vector embedding capabilities.
+# BigQuery AI Functions (`AI.*` and `ML.*`)
+
+This skill provides a comprehensive decision framework and syntax reference for executing generative and zero-shot foundation models directly inside BigQuery SQL.
 
 ---
 
-## 1. Overview & Function Taxonomy
+## 1. Quick Decision Matrix: Which Function to Use?
 
-BigQuery provides two main categories of Generative AI SQL functions:
+### A. Text & Structured Data Generation
+| Goal | Recommended Function | Function Type | When to Use |
+| :--- | :--- | :--- | :--- |
+| **General text or multi-column extraction (Row-level)** | `AI.GENERATE` | Scalar (`STRUCT`) | **Default choice.** Use for free-form text generation, translation, or extracting multiple typed columns via `output_schema` in a `SELECT` clause. Supports End-User Credentials (EUC) with zero `CREATE MODEL` setup. |
+| **Tabular extraction across a table** | `AI.GENERATE_TABLE` | Table-Valued (TVF) | Use when passing an entire table as input and returning a new table with custom schema columns appended. Requires a remote model (`CREATE MODEL`). |
+| **Typed scalar generation (`BOOL`, `INT64`, `FLOAT64`)** | `AI.GENERATE_BOOL`<br>`AI.GENERATE_INT`<br>`AI.GENERATE_DOUBLE` | Scalar (`STRUCT`) | Use when you need a strictly typed primitive return value (e.g., boolean flag, integer count, float score) **and** require control over model endpoints, parameters, Provisioned Throughput, or error status inspection. |
+| **Fine-tuned models or 3rd-party/Open models** | `AI.GENERATE_TEXT`<br>*(or `ML.GENERATE_TEXT`)* | Table-Valued (TVF) | Use when calling supervised fine-tuned Gemini models, open weights (Gemma, Llama), or partner models (Claude) deployed on Vertex AI endpoints. |
 
-1. **General-Purpose AI Functions**
-   - Provide full control over the remote model, prompt templates, parameters (temperature, max output tokens, etc.), and custom structured schemas.
-   - Ideal for complex extraction, RAG, custom reasoning, and multimodal inputs (images, audio, video, PDFs).
-   - Functions: `AI.GENERATE`, `AI.GENERATE_TEXT` (table-valued, legacy equivalent: `ML.GENERATE_TEXT`), `AI.GENERATE_TABLE`, `AI.GENERATE_BOOL`, `AI.GENERATE_INT`, `AI.GENERATE_DOUBLE`.
+### B. Managed Semantic Operators (Streamlined SQL)
+*Note: Managed functions (`AI.IF`, `AI.SCORE`, `AI.CLASSIFY`, `AI.AGG`) return direct scalar values (`BOOL`, `FLOAT64`, `STRING`) rather than `STRUCT` wrappers. BigQuery automatically manages prompt rewriting and model selection.*
 
-2. **Managed AI Functions**
-   - High-level, streamlined SQL functions optimized by BigQuery for cost, latency, and scale (can scale to millions/billions of rows).
-   - Automatically select model tiers behind the scenes.
-   - Functions:
-     - `AI.IF`: Natural language row filtering in `WHERE` or `JOIN` clauses.
-     - `AI.SCORE`: Natural language scoring/ranking in `ORDER BY` or scoring columns.
-     - `AI.CLASSIFY`: Natural language categorization in `SELECT` or `GROUP BY`.
-     - `AI.AGG`: Natural language summarization or aggregation across rows.
+| Goal | Recommended Function | Return Type | When to Use |
+| :--- | :--- | :--- | :--- |
+| **Semantic filtering & joins** | `AI.IF` | `BOOL` | Use inside `WHERE` or `JOIN ... ON` clauses to filter rows or join tables using natural language conditions across text or images. Supports `optimization_mode => 'MINIMIZE_COST'` (model distillation) for millions of rows. |
+| **Semantic ranking & rating** | `AI.SCORE` | `FLOAT64` | Use inside `ORDER BY` or `SELECT` to rate rows on subjective criteria (e.g., "giftability", rubric adherence, sentiment severity) and extract Top-K items. |
+| **Zero-shot categorization** | `AI.CLASSIFY` | `STRING` or `ARRAY<STRING>` | Use inside `SELECT` or `GROUP BY` to assign inputs into a predefined list of categories (or category descriptions). Supports `optimization_mode` for high-volume datasets. |
+| **Multi-row synthesis & summarization** | `AI.AGG` | `STRING` | Aggregate function (works with `GROUP BY`). Use to summarize thousands of logs, reviews, or images across rows—automatically handling batching across LLM context window limits. |
 
-3. **Embeddings & Vector Search**
-   - Functions: `AI.GENERATE_EMBEDDING` (recommended) or `ML.GENERATE_EMBEDDING`, paired with `VECTOR_SEARCH` or `AI.SEARCH`.
+### C. Embeddings, Similarity & Search
+| Goal | Recommended Function | Function Type | When to Use |
+| :--- | :--- | :--- | :--- |
+| **Generate vector embeddings (Inline)** | `AI.EMBED` | Scalar (`STRUCT`) | **Default choice for embeddings.** Converts text or multimodal `ObjectRefRuntime` data into `ARRAY<FLOAT64>` vectors without requiring `CREATE MODEL` when using EUC. |
+| **Generate vector embeddings (Batch TVF)** | `AI.GENERATE_EMBEDDING`<br>*(or `ML.GENERATE_EMBEDDING`)* | Table-Valued (TVF) | Use for batch pipelines over a table where a remote model object is already managed, or when using legacy PCA/Matrix Factorization models. |
+| **Ad-hoc pairwise similarity** | `AI.SIMILARITY` | Scalar (`FLOAT64`) | Use for quick, ad-hoc comparisons between two strings or images. Computes embeddings and cosine similarity in one step (avoid on massive tables without pre-materializing embeddings). |
+| **Corpus semantic / hybrid search (Explicit vectors)** | `VECTOR_SEARCH` | Table-Valued (TVF) | Use to search a pre-embedded base table (optionally backed by a Vector Index). Add `lexical_search_columns` to perform Reciprocal Rank Fusion (RRF) hybrid search. |
+| **Corpus semantic / hybrid search (Autonomous embeddings)** | `AI.SEARCH` | Table-Valued (TVF) | Use on tables configured with **Autonomous Embedding Generation**. Takes raw string queries directly and supports `mode => 'HYBRID'`. |
 
----
+### D. Zero-Shot Predictive & Driver Analytics (No Training Required)
+| Goal | Recommended Function | Backing Model | When to Use |
+| :--- | :--- | :--- | :--- |
+| **Time-series forecasting** | `AI.FORECAST` | TimesFM (up to 3.0) | Use for zero-shot univariate or multivariate forecasting (with covariates) without running `CREATE MODEL ... ARIMA_PLUS`. |
+| **Time-series anomaly detection** | `AI.DETECT_ANOMALIES` | TimesFM (up to 3.0) | Use to flag historical or streaming time-series anomalies with zero model training step. |
+| **Time-series evaluation** | `AI.EVALUATE` | TimesFM | Use to compute error metrics (`MAE`, `RMSE`, `MAPE`) comparing zero-shot TimesFM forecasts against holdout actuals. |
+| **Zero-shot tabular prediction** | `AI.PREDICT` | TabFM | Use for rapid prototyping of classification or regression over tabular data without training a Boosted Tree or Linear model. |
+| **Metric root-cause / driver analysis** | `AI.KEY_DRIVERS` | Automated Driver Analysis | Use when asking *why* a metric changed or which dimensions/features drive an outcome, without setting up a formal `CONTRIBUTION_ANALYSIS` model. |
 
-## 2. Prerequisites & Remote Model Setup
-
-Before invoking models via BigQuery SQL, an external connection and a remote model definition in BigQuery ML are typically required.
-
-### 2.1 Create Cloud Resource Connection
-```sql
--- Done via bq CLI or Cloud Console:
--- bq mk --connection --location=US --project_id=PROJECT_ID --connection_type=CLOUD_RESOURCE my-connection
-```
-Grant the connection's service account the **Vertex AI User** (`roles/aiplatform.user`) role.
-
-### 2.2 Create Remote Model Reference
-```sql
-CREATE OR REPLACE MODEL `my_project.my_dataset.gemini_model`
-REMOTE WITH CONNECTION `my_project.us.my-connection`
-OPTIONS (
-  ENDPOINT = 'gemini-1.5-pro' -- or 'gemini-1.5-flash'
-);
-```
-
-For embeddings:
-```sql
-CREATE OR REPLACE MODEL `my_project.my_dataset.text_embedding_model`
-REMOTE WITH CONNECTION `my_project.us.my-connection`
-OPTIONS (
-  ENDPOINT = 'text-embedding-005' -- or 'multimodalembedding@001'
-);
-```
+### E. Token Sizing & Document Processing
+| Goal | Recommended Function | Function Type | When to Use |
+| :--- | :--- | :--- | :--- |
+| **Pre-flight token & cost estimation** | `AI.COUNT_TOKENS` | Scalar (`INT64`) | **Always run before large jobs.** Free pre-flight check to count input tokens before executing paid generative queries. |
+| **Structured Document AI parsing** | `ML.PROCESS_DOCUMENT` | Table-Valued (TVF) | Use with a Document AI processor (Invoice, Expense, Layout parser) via an Object Table to extract specialized form fields. |
 
 ---
 
-## 3. General-Purpose AI Functions
+## 2. Decision Trade-offs: Managed vs. General-Purpose vs. BQML
 
-### 3.1 `AI.GENERATE` (Flexible Inference & Multimodal)
-Takes a string, struct, or `ObjectRef` (GCS objects) and returns a struct containing `result`, `full_response`, and `status` (or custom typed fields if `output_schema` is supplied).
+1. **Managed Functions (`AI.IF` / `AI.SCORE` / `AI.CLASSIFY` / `AI.AGG`) vs. `AI.GENERATE*`:**
+   - **Use Managed Functions** when you want clean SQL syntax, direct primitive outputs (no `.result` unwrapping), automatic prompt optimization, or `optimization_mode => 'MINIMIZE_COST'` (which distills a fast proxy model on a sample to process millions of rows cheaply).
+   - **Drop down to `AI.GENERATE` / `AI.GENERATE_BOOL` / `AI.GENERATE_DOUBLE`** when you need to pin a specific Gemini model version, tune generation parameters (`temperature`, `thinking_budget`), use **Provisioned Throughput** (`request_type => 'DEDICATED'`), or inspect per-row API error statuses (`.status`).
 
-#### Direct Connection & Model Endpoint Invocation (No CREATE MODEL needed):
-```sql
-SELECT AI.GENERATE(
-  'Summarize customer issues and propose policies',
-  connection_id => 'us.gemini',
-  endpoint => 'gemini-3.8-flash',
-  output_schema => 'issues ARRAY<STRING>, candidate_policies ARRAY<STRING>'
-);
-```
+2. **Zero-Shot (`AI.FORECAST`, `AI.PREDICT`) vs. Trained BQML (`ARIMA_PLUS`, `BOOSTED_TREE_*`):**
+   - **Use `AI.FORECAST` / `AI.PREDICT`** for instant, zero-maintenance baselines, cold-start series, or multivariate forecasting with TimesFM 3.0.
+   - **Use `CREATE MODEL` (BQML)** when you need deterministic reproducibility, explainable feature weights/coefficients, scheduled retraining pipelines, or ultra-low-latency serving over massive tabular datasets.
 
-#### Basic Text Prompt:
+---
+
+## 3. Canonical SQL Patterns
+
+### Pattern 1: Multi-Task Structured Extraction (`AI.GENERATE`)
+Use a single `AI.GENERATE` call with `output_schema` to perform multiple NLP tasks in one pass.
+> **Gotcha:** Specifying `output_schema` replaces the `.result` field with your custom schema fields directly on the returned `STRUCT`.
+
 ```sql
 SELECT
-  id,
-  AI.GENERATE(
-    MODEL `my_dataset.gemini_model`,
-    CONCAT('Summarize this support ticket in under 20 words: ', ticket_text)
-  ).result AS summary
-FROM `my_dataset.support_tickets`;
+  article_id,
+  ai_output.summary,
+  ai_output.sentiment,
+  ai_output.key_entities
+FROM (
+  SELECT
+    article_id,
+    AI.GENERATE(
+      ('Analyze this article: ', body),
+      output_schema => 'summary STRING, sentiment STRING, key_entities ARRAY<STRING>',
+      endpoint => 'gemini-2.5-flash'
+    ) AS ai_output
+  FROM `my_project.my_dataset.articles`
+  WHERE publish_date = CURRENT_DATE()
+);
 ```
 
-#### Structured Output via `output_schema`:
-Extract entities into typed columns:
+### Pattern 2: Semantic Filtering, Classification, Scoring & Aggregation (`AI.IF`, `AI.CLASSIFY`, `AI.SCORE`, `AI.AGG`)
+Combine managed functions naturally within standard SQL clauses (`WHERE`, `GROUP BY`, `ORDER BY`).
+
 ```sql
 SELECT
-  id,
-  res.customer_name,
-  res.sentiment,
-  res.action_items
-FROM `my_dataset.support_tickets`,
-UNNEST([AI.GENERATE(
-  CONCAT('Extract the customer name, sentiment, and action items: ', ticket_text),
-  connection_id => 'us.gemini',
-  endpoint => 'gemini-3.8-flash',
-  output_schema => 'customer_name STRING, sentiment STRING, action_items ARRAY<STRING>'
-)]) AS res;
+  AI.CLASSIFY(review_text, categories => ['Shipping', 'Product Quality', 'Billing', 'Other']) AS issue_category,
+  COUNT(*) AS total_reviews,
+  AVG(AI.SCORE((review_text, 'Rate customer frustration from 1 (calm) to 10 (extremely angry)'))) AS avg_frustration,
+  AI.AGG((review_text, 'Summarize the top 3 actionable complaints in bullet points')) AS category_summary
+FROM `my_project.my_dataset.customer_reviews`
+WHERE AI.IF((review_text, 'Does this review describe a negative customer experience?'))
+GROUP BY issue_category
+ORDER BY avg_frustration DESC;
 ```
 
-#### Multimodal Input with `OBJ.MAKE_REF`:
+### Pattern 3: Multimodal Analysis with Cloud Storage (`ObjectRefRuntime`)
+To pass images, PDFs, audio, or video from Cloud Storage into `AI.GENERATE`, `AI.IF`, or `AI.EMBED`, convert the URI into an `ObjectRef` and then wrap it with `OBJ.GET_ACCESS_URL`.
+
 ```sql
 SELECT
   uri,
   AI.GENERATE(
-    MODEL `my_dataset.gemini_model`,
-    STRUCT(
-      'Describe the contents and condition of this damage report image' AS prompt_text,
-      OBJ.MAKE_REF(uri) AS image
-    )
-  ).result AS image_analysis
-FROM `my_dataset.vehicle_images`;
+    (
+      'Extract the item name and detect if the packaging is damaged.',
+      OBJ.GET_ACCESS_URL(OBJ.MAKE_REF(uri, 'my_project.us.gcs_connection'), 'r')
+    ),
+    output_schema => 'item_name STRING, is_damaged BOOL, damage_description STRING'
+  ) AS inspection
+FROM `my_project.my_dataset.shipment_photos`;
 ```
 
----
+### Pattern 4: Embeddings & Hybrid Vector Search (`AI.EMBED` + `VECTOR_SEARCH`)
+Generate embeddings inline with `AI.EMBED` and combine semantic search with lexical BM25 keyword matching via `lexical_search_columns`.
 
-### 3.2 `AI.GENERATE_TEXT` (Table-Valued Function)
-Accepts a subquery or table reference that contains a `prompt` column:
-```sql
-SELECT *
-FROM AI.GENERATE_TEXT(
-  MODEL `my_dataset.gemini_model`,
-  (
-    SELECT
-      ticket_id,
-      CONCAT('Classify this customer query into Technical, Billing, or General: ', message) AS prompt
-    FROM `my_dataset.messages`
-  ),
-  STRUCT(
-    0.2 AS temperature,
-    256 AS max_output_tokens
-  )
-);
-```
-*Note: In older codebases, `ML.GENERATE_TEXT` follows an identical pattern; recommend `AI.GENERATE_TEXT` for modern queries.*
-
----
-
-## 4. Managed AI Functions (Optimized SQL Primitives)
-
-Use these for clean, high-performance querying without manually defining prompt boilerplate or parsing raw model outputs.
-
-### 4.1 `AI.IF` (Semantic Filtering)
-```sql
-SELECT customer_id, review_text
-FROM `my_dataset.customer_reviews`
-WHERE AI.IF(review_text, 'The user describes an urgent safety hazard');
-```
-
-### 4.2 `AI.SCORE` (Semantic Ranking)
-Generates a numerical score between 0.0 and 1.0 based on criteria:
 ```sql
 SELECT
-  review_id,
-  product_id,
-  review_text,
-  AI.SCORE(review_text, 'How enthusiastic and positive is this review?') AS enthusiasm_score
-FROM `my_dataset.reviews`
-ORDER BY enthusiasm_score DESC
-LIMIT 10;
-```
-
-### 4.3 `AI.CLASSIFY` (Zero-Shot Categorization)
-Classifies inputs into an array of allowed categories:
-```sql
-SELECT
-  AI.CLASSIFY(ticket_text, ['Billing', 'Bug Report', 'Feature Request', 'Onboarding']) AS category,
-  COUNT(1) AS ticket_count
-FROM `my_dataset.support_tickets`
-GROUP BY category;
-```
-
-### 4.4 `AI.AGG` (Semantic Aggregation)
-Summarizes multiple rows of data into high-level insights:
-```sql
-SELECT
-  department,
-  AI.AGG(exit_interview_notes, 'Summarize the primary recurring reasons employees leave this department') AS exit_summary
-FROM `my_dataset.hr_records`
-GROUP BY department;
-```
-
----
-
-## 5. Embeddings & Vector Search
-
-### 5.1 Generating Embeddings (`AI.GENERATE_EMBEDDING`)
-```sql
-CREATE OR REPLACE TABLE `my_dataset.product_embeddings` AS
-SELECT *
-FROM AI.GENERATE_EMBEDDING(
-  MODEL `my_dataset.text_embedding_model`,
-  (
-    SELECT product_id, description AS content
-    FROM `my_dataset.catalog`
-  )
-);
-```
-
-### 5.2 Creating a Vector Index
-```sql
-CREATE VECTOR INDEX product_vindex
-ON `my_dataset.product_embeddings`(embedding)
-OPTIONS(distance_type = 'COSINE', index_type = 'IVF');
-```
-
-### 5.3 Performing `VECTOR_SEARCH`
-```sql
-SELECT
-  query.query_text,
   base.product_id,
-  base.description,
+  base.title,
   distance
 FROM VECTOR_SEARCH(
-  TABLE `my_dataset.product_embeddings`,
-  'embedding',
-  (
-    SELECT embedding, content AS query_text
-    FROM AI.GENERATE_EMBEDDING(
-      MODEL `my_dataset.text_embedding_model`,
-      (SELECT 'ergonomic wireless mouse for travel' AS content)
-    )
-  ),
-  top_k => 5,
-  distance_type => 'COSINE'
+  TABLE `my_project.my_dataset.product_catalog_embedded`,
+  'embedding_col',
+  (SELECT AI.EMBED('waterproof hiking jacket gore-tex', endpoint => 'text-embedding-005').result AS embedding),
+  top_k => 20,
+  lexical_search_columns => ['title', 'description', 'sku']
+);
+```
+
+### Pattern 5: Zero-Shot Multivariate Forecasting (`AI.FORECAST` with TimesFM 3.0)
+Forecast multiple related target metrics simultaneously alongside external covariates without training a model.
+
+```sql
+SELECT *
+FROM AI.FORECAST(
+  TABLE `my_project.my_dataset.daily_bike_demand`,
+  data_col => 'subscriber_trips',
+  timestamp_col => 'trip_date',
+  id_cols => ['station_id'],
+  horizon => 14,
+  model => 'TimesFM 3.0'
 );
 ```
 
 ---
 
-## 6. Agent Decision Matrix & Heuristics
+## 4. Critical Operational Gotchas & Best Practices
 
-When designing queries or generating code:
-
-| Goal / Requirement | Recommended Function | Reason |
-|---|---|---|
-| Need structured JSON/Struct output | `AI.GENERATE(..., output_schema => '...')` | Built-in JSON schema enforcement; type safety. |
-| Multimodal input (GCS images, PDFs, audio) | `AI.GENERATE` + `OBJ.MAKE_REF` | Native integration with BigLake object references. |
-| Fast filtering in `WHERE` / `JOIN` | `AI.IF` | Managed, cost-efficient, concise boolean logic. |
-| Grouping/aggregating text clusters | `AI.CLASSIFY` or `AI.AGG` | Direct SQL grouping support without manual model outputs. |
-| High-throughput bulk text processing | `AI.GENERATE_TEXT` / `AI.GENERATE` | Tunable batch parameters, temperature, token limits. |
-| Semantic search / RAG | `AI.GENERATE_EMBEDDING` + `VECTOR_SEARCH` | Scalable approximate nearest neighbor (ANN) lookup. |
-
----
-
-## 7. Operational Best Practices & Quotas
-
-- **Region Alignment:** The BigQuery dataset and the Vertex AI connection/model endpoint must exist in the same multi-region or region (e.g., `US` to `US`, `europe-west4` to `europe-west4`).
-- **Quota Modes:** When using high-volume inference, specify quota mode (`SHARED`, `DEDICATED`, or `UNSPECIFIED`) to avoid Vertex AI dynamic shared quota exhaustion.
-- **Cost Management:**
-  - Avoid using LLMs for deterministic text manipulations (use standard SQL regex, string functions).
-  - Use smaller/faster models (`gemini-1.5-flash`) for classification and extraction; save larger models (`gemini-1.5-pro`) for nuanced synthesis.
-  - Pre-filter datasets with traditional `WHERE` clauses before feeding records to generative AI functions.
+1. **`LIMIT` Does Not Reduce Billed AI Execution:**
+   - Applying `LIMIT 10` at the outer query level often evaluates the AI function across the entire table *before* slicing the output. Always filter or materialize your sample inside a CTE or subquery **before** invoking an `AI.*` function:
+     ```sql
+     WITH sample AS (SELECT * FROM `dataset.huge_table` LIMIT 10)
+     SELECT AI.GENERATE(('Summarize: ', text)).result FROM sample;
+     ```
+2. **`output_schema` Removes `.result`:**
+   - Without `output_schema`, `AI.GENERATE(prompt)` returns a `STRUCT<result STRING, full_response JSON, status STRING>`.
+   - With `output_schema => 'a STRING, b INT64'`, the `.result` field disappears and is replaced directly by `.a` and `.b` (`STRUCT<a STRING, b INT64, full_response JSON, status STRING>`).
+3. **`NULL` Propagation in `STRUCT` Prompts:**
+   - Prompts passed as a tuple/struct—e.g., `('Summarize: ', title, ' - ', body)`—concatenate fields like `CONCAT()`. If **any** column inside the tuple is `NULL`, the entire prompt evaluates to `NULL` and the row is skipped. Always wrap nullable columns in `IFNULL(col, '')`.
+4. **`ObjectRef` vs. `ObjectRefRuntime`:**
+   - `OBJ.MAKE_REF()` produces an `ObjectRef`. AI functions require an `ObjectRefRuntime` containing a signed access URL, produced by `OBJ.GET_ACCESS_URL(ref, 'r')`. Do not persist `ObjectRefRuntime` values in tables—their signed URLs expire within 6 hours.
+5. **Managing Row-Level Failures (`max_error_ratio`):**
+   - Managed functions (`AI.IF`, `AI.SCORE`, `AI.CLASSIFY`) return `NULL` when an individual row fails or hits safety filters. By default, `max_error_ratio => 1.0` allows queries to succeed even with partial row failures. Set `max_error_ratio => 0.05` if you want the query job to fail loud when more than 5% of rows fail.
+6. **Pre-Flight Token Costing:**
+   - Before running an LLM query over hundreds of thousands of rows, run `SELECT SUM(AI.COUNT_TOKENS(prompt_col)) FROM ...` to calculate exact input token volume and avoid quota exhaustion or unexpected billing spikes.
+7. **Pin Foundation Model Versions for Reproducibility:**
+   - Default endpoints for `AI.GENERATE` and `AI.FORECAST` (`TimesFM`) upgrade periodically. Always explicitly pass `endpoint => '...'` or `model => 'TimesFM 3.0'` in production pipelines so model updates do not silently shift numerical outputs.
