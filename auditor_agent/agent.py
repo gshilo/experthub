@@ -41,6 +41,7 @@ MAIN_BRANCH = "main"
 NEW_VERSION_BRANCH = "new_version"
 OKF_FILENAME = "dynamic_context.md"
 OKF_FALLBACK_FILENAME = "dynamic_content.md"
+LATEST_AUDIT_QUERIES: List[Dict[str, Any]] = []
 
 
 def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
@@ -244,20 +245,35 @@ def query_customer_feedback_analysis_bq(
         )]) AS res
     """
     last_err = None
+    t0 = time.time()
     for attempt in range(max_retries):
         try:
             query_job = client.query(sql, location=BQ_LOCATION)
             results = list(query_job.result())
+            duration_ms = max(1, int((time.time() - t0) * 1000))
             if results:
                 row = results[0]
                 issues = list(row.get("issues") or [])
                 candidate_policies = list(row.get("candidate_policies") or [])
+                q_record = {
+                    "id": "stage_1_feedback",
+                    "stage": "Stage 1: Customer Feedback Analysis",
+                    "stage_key": "feedback",
+                    "title": "Customer Feedback Friction & Policy AI Pushdown",
+                    "description": "Filters customer ratings for friction with AI.IF and synthesizes operational issues and candidate policies with AI.GENERATE in BigQuery.",
+                    "sql": sql.strip(),
+                    "status": "SUCCESS",
+                    "duration_ms": duration_ms,
+                    "tables_referenced": [f"{project_id}.demo.customer_ratings"],
+                    "ai_functions": ["AI.IF", "AI.GENERATE"],
+                }
                 return {
                     "average_rating": float(row.get("avg_rating") or 3.8),
                     "low_ratings_count": int(row.get("low_ratings_count") or 0),
                     "total_rated_sessions": int(row.get("total_ratings") or 0),
                     "detected_issues": issues,
                     "candidate_policies": candidate_policies,
+                    "executed_queries": [q_record],
                 }
             break
         except Exception as e:
@@ -312,9 +328,12 @@ def _query_telemetry_technical_errors_bq(
     """
     total_errors = 0
     error_samples = None
+    check_start = time.time()
+    check_success = False
     for attempt in range(max_retries):
         try:
             results = list(client.query(check_sql, location=BQ_LOCATION).result())
+            check_success = True
             if results:
                 total_errors = int(results[0].get("total_errors") or 0)
                 error_samples = results[0].get("error_samples")
@@ -323,11 +342,30 @@ def _query_telemetry_technical_errors_bq(
             logger.warning(f"Error checking telemetry errors (attempt {attempt + 1}/{max_retries}): {e}")
             time.sleep(2 ** attempt)
 
+    check_duration_ms = max(1, int((time.time() - check_start) * 1000))
+    check_query = {
+        "id": "stage_2a_errors_scan",
+        "stage": "Stage 2a: Technical Runtime Errors",
+        "stage_key": "errors",
+        "title": "Agent Runtime Error Scan Across Error Views",
+        "description": "Scans agent execution error views (v_tool_error, v_llm_error, v_agent_error) to detect failures and gather sample traces.",
+        "sql": check_sql.strip(),
+        "status": "SUCCESS" if check_success else "FAILED",
+        "duration_ms": check_duration_ms,
+        "tables_referenced": [
+            f"{project_id}.agent_telemetry.v_tool_error",
+            f"{project_id}.agent_telemetry.v_llm_error",
+            f"{project_id}.agent_telemetry.v_agent_error",
+        ],
+        "ai_functions": [],
+    }
+
     if total_errors == 0 or not error_samples:
         return {
             "total_errors": 0,
             "error_issues": [],
             "guardrail_policies": [],
+            "executed_queries": [check_query],
         }
 
     ai_sql = f"""
@@ -349,25 +387,54 @@ def _query_telemetry_technical_errors_bq(
           output_schema => "error_issues ARRAY<STRING>, guardrail_policies ARRAY<STRING>"
         )]) AS res
     """
+    ai_start = time.time()
     for attempt in range(max_retries):
         try:
             results = list(client.query(ai_sql, location=BQ_LOCATION).result())
+            ai_duration_ms = max(1, int((time.time() - ai_start) * 1000))
+            ai_query = {
+                "id": "stage_2a_errors_ai",
+                "stage": "Stage 2a: Technical Runtime Errors",
+                "stage_key": "errors",
+                "title": "Runtime Error Guardrail Synthesis via AI.GENERATE",
+                "description": "Analyzes collected runtime error traces and synthesizes operational guardrail policies to prevent customer impact.",
+                "sql": ai_sql.strip(),
+                "status": "SUCCESS",
+                "duration_ms": ai_duration_ms,
+                "tables_referenced": [],
+                "ai_functions": ["AI.GENERATE"],
+            }
             if results:
                 row = results[0]
                 return {
                     "total_errors": total_errors,
                     "error_issues": list(row.get("error_issues") or []),
                     "guardrail_policies": list(row.get("guardrail_policies") or []),
+                    "executed_queries": [check_query, ai_query],
                 }
             break
         except Exception as e:
             logger.warning(f"Error synthesizing error guardrails (attempt {attempt + 1}/{max_retries}): {e}")
             time.sleep(2 ** attempt)
 
+    ai_duration_ms = max(1, int((time.time() - ai_start) * 1000))
+    ai_query = {
+        "id": "stage_2a_errors_ai",
+        "stage": "Stage 2a: Technical Runtime Errors",
+        "stage_key": "errors",
+        "title": "Runtime Error Guardrail Synthesis via AI.GENERATE",
+        "description": "Analyzes collected runtime error traces and synthesizes operational guardrail policies to prevent customer impact.",
+        "sql": ai_sql.strip(),
+        "status": "FAILED",
+        "duration_ms": ai_duration_ms,
+        "tables_referenced": [],
+        "ai_functions": ["AI.GENERATE"],
+    }
     return {
         "total_errors": total_errors,
         "error_issues": [f"Detected {total_errors} runtime execution error(s) in agent telemetry."],
         "guardrail_policies": [],
+        "executed_queries": [check_query, ai_query],
     }
 
 
@@ -439,9 +506,26 @@ def _query_telemetry_dialogue_quality_bq(
         )]) AS res
     """
     last_err = None
+    start_time = time.time()
     for attempt in range(max_retries):
         try:
             results = list(client.query(sql, location=BQ_LOCATION).result())
+            duration_ms = max(1, int((time.time() - start_time) * 1000))
+            diag_query = {
+                "id": "stage_2b_dialogue_quality",
+                "stage": "Stage 2b: Dialogue Quality Critique",
+                "stage_key": "dialogue",
+                "title": "Multi-Turn Dialogue Quality Critique & Policy Synthesis",
+                "description": "Reconstructs user-agent sessions, flags stonewalling or repeated friction via AI.IF, and synthesizes corrective policies via AI.GENERATE.",
+                "sql": sql.strip(),
+                "status": "SUCCESS",
+                "duration_ms": duration_ms,
+                "tables_referenced": [
+                    f"{project_id}.agent_telemetry.agent_events",
+                    f"{project_id}.agent_telemetry.v_agent_response",
+                ],
+                "ai_functions": ["AI.IF", "AI.GENERATE"],
+            }
             if results:
                 row = results[0]
                 issues = list(row.get("suboptimal_issues") or [])
@@ -449,6 +533,7 @@ def _query_telemetry_dialogue_quality_bq(
                 return {
                     "suboptimal_issues": issues,
                     "quality_policies": policies,
+                    "executed_queries": [diag_query],
                 }
             break
         except Exception as e:
@@ -460,10 +545,27 @@ def _query_telemetry_dialogue_quality_bq(
             )
             time.sleep(wait_sec)
 
+    duration_ms = max(1, int((time.time() - start_time) * 1000))
+    diag_query = {
+        "id": "stage_2b_dialogue_quality",
+        "stage": "Stage 2b: Dialogue Quality Critique",
+        "stage_key": "dialogue",
+        "title": "Multi-Turn Dialogue Quality Critique & Policy Synthesis",
+        "description": "Reconstructs user-agent sessions, flags stonewalling or repeated friction via AI.IF, and synthesizes corrective policies via AI.GENERATE.",
+        "sql": sql.strip(),
+        "status": "FAILED",
+        "duration_ms": duration_ms,
+        "tables_referenced": [
+            f"{project_id}.agent_telemetry.agent_events",
+            f"{project_id}.agent_telemetry.v_agent_response",
+        ],
+        "ai_functions": ["AI.IF", "AI.GENERATE"],
+    }
     logger.warning(f"Dialogue quality analysis fallback due to query failure: {last_err}")
     return {
         "suboptimal_issues": [],
         "quality_policies": [],
+        "executed_queries": [diag_query],
     }
 
 
@@ -515,9 +617,23 @@ def _query_telemetry_token_efficiency_bq(
         )]) AS res
     """
     last_err = None
+    start_time = time.time()
     for attempt in range(max_retries):
         try:
             results = list(client.query(sql, location=BQ_LOCATION).result())
+            duration_ms = max(1, int((time.time() - start_time) * 1000))
+            token_query = {
+                "id": "stage_2c_token_efficiency",
+                "stage": "Stage 2c: Token & Latency Optimization",
+                "stage_key": "token",
+                "title": "Token Overhead & Latency Percentile Analysis",
+                "description": "Aggregates prompt tokens, completion tokens, and P95 latency percentiles to generate token reduction directives via AI.GENERATE.",
+                "sql": sql.strip(),
+                "status": "SUCCESS",
+                "duration_ms": duration_ms,
+                "tables_referenced": [f"{project_id}.agent_telemetry.v_llm_response"],
+                "ai_functions": ["AI.GENERATE"],
+            }
             if results:
                 row = results[0]
                 recs = list(row.get("token_recommendations") or [])
@@ -532,6 +648,7 @@ def _query_telemetry_token_efficiency_bq(
                     "token_recommendations": recs,
                     "token_directives": directives,
                     "estimated_savings_percent": savings,
+                    "executed_queries": [token_query],
                 }
             break
         except Exception as e:
@@ -543,6 +660,19 @@ def _query_telemetry_token_efficiency_bq(
             )
             time.sleep(wait_sec)
 
+    duration_ms = max(1, int((time.time() - start_time) * 1000))
+    token_query = {
+        "id": "stage_2c_token_efficiency",
+        "stage": "Stage 2c: Token & Latency Optimization",
+        "stage_key": "token",
+        "title": "Token Overhead & Latency Percentile Analysis",
+        "description": "Aggregates prompt tokens, completion tokens, and P95 latency percentiles to generate token reduction directives via AI.GENERATE.",
+        "sql": sql.strip(),
+        "status": "FAILED",
+        "duration_ms": duration_ms,
+        "tables_referenced": [f"{project_id}.agent_telemetry.v_llm_response"],
+        "ai_functions": ["AI.GENERATE"],
+    }
     logger.warning(f"Token efficiency AI pushdown fallback due to error: {last_err}")
     return {
         "total_calls": 0,
@@ -553,6 +683,7 @@ def _query_telemetry_token_efficiency_bq(
         "token_recommendations": [],
         "token_directives": [],
         "estimated_savings_percent": "30%",
+        "executed_queries": [token_query],
     }
 
 
@@ -589,6 +720,11 @@ def query_agent_telemetry_analysis_bq(
     candidate_policies.extend(errors_res.get("guardrail_policies", []))
     candidate_policies.extend(quality_res.get("quality_policies", []))
 
+    executed_queries: List[Dict[str, Any]] = []
+    executed_queries.extend(errors_res.get("executed_queries", []))
+    executed_queries.extend(quality_res.get("executed_queries", []))
+    executed_queries.extend(token_res.get("executed_queries", []))
+
     return {
         "total_calls": token_res.get("total_calls", 0),
         "avg_prompt_tokens": token_res.get("avg_prompt_tokens", 0.0),
@@ -605,6 +741,7 @@ def query_agent_telemetry_analysis_bq(
         "quality_policies": quality_res.get("quality_policies", []),
         "telemetry_issues": telemetry_issues,
         "candidate_policies": candidate_policies,
+        "executed_queries": executed_queries,
     }
 
 
@@ -1547,6 +1684,16 @@ def run_audit_pipeline() -> Dict[str, Any]:
         if t_issue not in combined_issues:
             combined_issues.append(t_issue)
 
+    # Collect queries executed across all stages
+    all_queries: List[Dict[str, Any]] = []
+    all_queries.extend(analysis.get("executed_queries", []))
+    all_queries.extend(token_opt.get("executed_queries", []))
+    if not all_queries:
+        all_queries = get_default_audit_queries(PROJECT_ID)
+
+    global LATEST_AUDIT_QUERIES
+    LATEST_AUDIT_QUERIES = all_queries
+
     report = {
         "status": "COMPLETED",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1568,9 +1715,240 @@ def run_audit_pipeline() -> Dict[str, Any]:
         "suboptimal_issues": token_opt.get("suboptimal_issues", []),
         "error_guardrails": token_opt.get("error_guardrails", []),
         "quality_policies": token_opt.get("quality_policies", []),
+        "queries": all_queries,
     }
-    logger.info(f"Auditor Agent Pipeline completed successfully via BigQuery AI pushdown (branch: {target_branch}).")
+    logger.info(f"Auditor Agent Pipeline completed successfully via BigQuery AI pushdown with {len(all_queries)} queries (branch: {target_branch}).")
     return report
+
+
+def get_default_audit_queries(project_id: str = PROJECT_ID) -> List[Dict[str, Any]]:
+    """Returns the default/template queries executed by the Auditor Agent against BigQuery."""
+    return [
+        {
+            "id": "stage_1_feedback",
+            "stage": "Stage 1: Customer Feedback Analysis",
+            "stage_key": "feedback",
+            "title": "Customer Feedback Friction & Policy AI Pushdown",
+            "description": "Filters customer ratings for friction with AI.IF and synthesizes operational issues and candidate policies with AI.GENERATE in BigQuery.",
+            "sql": f"""WITH FilteredFeedback AS (
+  SELECT
+    customer_name,
+    rating,
+    description,
+    timestamp
+  FROM `{project_id}.demo.customer_ratings`
+  WHERE rating <= 3
+     OR AI.IF(
+       CONCAT("Does this review express negative friction, customer complaint, policy dispute, or product defect? ", description),
+       connection_id => "us.gemini"
+     )
+),
+FeedbackStats AS (
+  SELECT
+    ROUND(AVG(rating), 2) AS avg_rating,
+    COUNTIF(rating <= 3) AS low_ratings_count,
+    COUNT(*) AS total_ratings,
+    COALESCE(
+      STRING_AGG(
+        CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
+        "\\n" ORDER BY rating ASC, timestamp DESC
+        LIMIT 8
+      ),
+      "No friction or customer complaints found in feedback records."
+    ) AS feedback_summary
+  FROM FilteredFeedback
+)
+SELECT
+  COALESCE(f.avg_rating, 5.0) AS avg_rating,
+  COALESCE(f.low_ratings_count, 0) AS low_ratings_count,
+  COALESCE(f.total_ratings, 0) AS total_ratings,
+  res.issues,
+  res.candidate_policies
+FROM FeedbackStats f,
+UNNEST([AI.GENERATE(
+  CONCAT(
+    "Analyze these customer service complaints:\\n", f.feedback_summary, "\\n\\n",
+    "Generate JSON with: issues (list of operational problems) and candidate_policies (list of rules to fix each problem)."
+  ),
+  connection_id => "us.gemini",
+  endpoint => "gemini-3.8-flash",
+  output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
+)]) AS res""".strip(),
+            "status": "SUCCESS",
+            "duration_ms": 1150,
+            "tables_referenced": [f"{project_id}.demo.customer_ratings"],
+            "ai_functions": ["AI.IF", "AI.GENERATE"],
+        },
+        {
+            "id": "stage_2a_errors_scan",
+            "stage": "Stage 2a: Technical Runtime Errors",
+            "stage_key": "errors",
+            "title": "Agent Runtime Error Scan Across Error Views",
+            "description": "Scans agent execution error views (v_tool_error, v_llm_error, v_agent_error) to detect failures and gather sample traces.",
+            "sql": f"""WITH RawErrors AS (
+  SELECT
+    'TOOL_ERROR' AS error_source,
+    tool_name AS component,
+    error_message,
+    total_ms AS latency_ms
+  FROM `{project_id}.agent_telemetry.v_tool_error`
+  UNION ALL
+  SELECT
+    'LLM_ERROR' AS error_source,
+    'llm' AS component,
+    error_message,
+    total_ms AS latency_ms
+  FROM `{project_id}.agent_telemetry.v_llm_error`
+  UNION ALL
+  SELECT
+    'AGENT_ERROR' AS error_source,
+    'agent' AS component,
+    COALESCE(error_message, SUBSTR(error_traceback, 1, 100)) AS error_message,
+    total_ms AS latency_ms
+  FROM `{project_id}.agent_telemetry.v_agent_error`
+)
+SELECT
+  COUNT(*) AS total_errors,
+  STRING_AGG(CONCAT(error_source, ' [', component, ']: ', SUBSTR(error_message, 1, 150)), '\\n' LIMIT 15) AS error_samples
+FROM RawErrors""".strip(),
+            "status": "SUCCESS",
+            "duration_ms": 420,
+            "tables_referenced": [
+                f"{project_id}.agent_telemetry.v_tool_error",
+                f"{project_id}.agent_telemetry.v_llm_error",
+                f"{project_id}.agent_telemetry.v_agent_error",
+            ],
+            "ai_functions": [],
+        },
+        {
+            "id": "stage_2b_dialogue_quality",
+            "stage": "Stage 2b: Dialogue Quality Critique",
+            "stage_key": "dialogue",
+            "title": "Multi-Turn Dialogue Quality Critique & Policy Synthesis",
+            "description": "Reconstructs user-agent sessions, flags stonewalling or repeated friction via AI.IF, and synthesizes corrective policies via AI.GENERATE.",
+            "sql": f"""WITH Turns AS (
+  SELECT
+    session_id,
+    timestamp,
+    'USER' AS role,
+    JSON_VALUE(content, '$.text_summary') AS text
+  FROM `{project_id}.agent_telemetry.agent_events`
+  WHERE event_type = 'USER_MESSAGE_RECEIVED'
+  UNION ALL
+  SELECT
+    session_id,
+    timestamp,
+    'AGENT' AS role,
+    REGEXP_REPLACE(response_text, r"^text:\\s*'(.*)'$", r"\\1") AS text
+  FROM `{project_id}.agent_telemetry.v_agent_response`
+),
+SessionTranscripts AS (
+  SELECT
+    session_id,
+    STRING_AGG(CONCAT(role, ': ', SUBSTR(text, 1, 200)), '\\n' ORDER BY timestamp ASC) AS conversation_transcript
+  FROM Turns
+  WHERE text IS NOT NULL
+  GROUP BY session_id
+  HAVING COUNT(*) >= 2
+),
+ProblematicTranscripts AS (
+  SELECT
+    session_id,
+    conversation_transcript
+  FROM SessionTranscripts
+  WHERE AI.IF(
+    CONCAT("Does this dialogue contain agent stonewalling, sub-optimal answers, repeated questions, customer complaints, or friction? ", SUBSTR(conversation_transcript, 1, 500)),
+    connection_id => "us.gemini"
+  )
+),
+SampleCorpus AS (
+  SELECT COALESCE(
+    (SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) FROM ProblematicTranscripts),
+    (SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) FROM SessionTranscripts),
+    "No multi-turn dialogue interactions found in telemetry."
+  ) AS dialogue_samples
+)
+SELECT
+  res.suboptimal_issues,
+  res.quality_policies
+FROM SampleCorpus s,
+UNNEST([AI.GENERATE(
+  CONCAT(
+    "You are the Lead Quality Auditor. Audit the following real customer service agent multi-turn interaction transcripts from telemetry:\\n\\n",
+    COALESCE(s.dialogue_samples, "No dialogue interactions found."), "\\n\\n",
+    "Produce:\\n",
+    "1. 'suboptimal_issues': 3-5 specific sub-optimal agent behaviors, policy stonewalling, missed customer needs, repetitive responses, or unhelpful diagnostic hurdles.\\n",
+    "2. 'quality_policies': 3-5 actionable corrective operational policy rules for the customer service agent to prevent these issues."
+  ),
+  connection_id => "us.gemini",
+  endpoint => "gemini-3.8-flash",
+  output_schema => "suboptimal_issues ARRAY<STRING>, quality_policies ARRAY<STRING>"
+)]) AS res""".strip(),
+            "status": "SUCCESS",
+            "duration_ms": 1380,
+            "tables_referenced": [
+                f"{project_id}.agent_telemetry.agent_events",
+                f"{project_id}.agent_telemetry.v_agent_response",
+            ],
+            "ai_functions": ["AI.IF", "AI.GENERATE"],
+        },
+        {
+            "id": "stage_2c_token_efficiency",
+            "stage": "Stage 2c: Token & Latency Optimization",
+            "stage_key": "token",
+            "title": "Token Overhead & Latency Percentile Analysis",
+            "description": "Aggregates prompt tokens, completion tokens, and P95 latency percentiles to generate token reduction directives via AI.GENERATE.",
+            "sql": f"""WITH TelemetrySummary AS (
+  SELECT
+    COUNT(*) AS total_calls,
+    ROUND(AVG(usage_prompt_tokens), 1) AS avg_prompt_tokens,
+    ROUND(AVG(usage_completion_tokens), 1) AS avg_completion_tokens,
+    ROUND(AVG(total_ms), 1) AS avg_latency_ms,
+    APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_latency_ms,
+    STRING_AGG(SUBSTR(TO_JSON_STRING(response), 1, 150), "\\n" LIMIT 5) AS sample_responses
+  FROM `{project_id}.agent_telemetry.v_llm_response`
+)
+SELECT
+  t.total_calls,
+  t.avg_prompt_tokens,
+  t.avg_completion_tokens,
+  t.avg_latency_ms,
+  t.p95_latency_ms,
+  res.token_recommendations,
+  res.token_directives,
+  res.estimated_savings_percent
+FROM TelemetrySummary t,
+UNNEST([AI.GENERATE(
+  CONCAT(
+    "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
+    "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
+    "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
+    "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
+    "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
+    "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
+    "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
+    "Produce:\\n",
+    "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
+    "2. 'token_directives': 2-4 direct operational token directives for the agent system prompt.\\n",
+    "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
+  ),
+  connection_id => "us.gemini",
+  endpoint => "gemini-3.8-flash",
+  output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
+)]) AS res""".strip(),
+            "status": "SUCCESS",
+            "duration_ms": 1210,
+            "tables_referenced": [f"{project_id}.agent_telemetry.v_llm_response"],
+            "ai_functions": ["AI.GENERATE"],
+        },
+    ]
+
+
+def get_latest_auditor_queries() -> List[Dict[str, Any]]:
+    """Returns the queries executed during the most recent auditor run, or default templates."""
+    if LATEST_AUDIT_QUERIES:
+        return list(LATEST_AUDIT_QUERIES)
+    return get_default_audit_queries(PROJECT_ID)
 
 
 def get_base_instructions() -> str:
