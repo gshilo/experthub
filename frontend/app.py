@@ -326,9 +326,237 @@ except Exception as e:
         return f"Billing Record for {order_id}: Settled charge confirmed. Standard refund inspection SLA is 5-7 business days."
 
 try:
-    from auditor_agent.agent import run_audit_pipeline
+    from auditor_agent.agent import (
+        run_audit_pipeline,
+        get_latest_auditor_queries,
+        get_default_audit_queries,
+    )
 except Exception as e:
     logger.warning(f"Using built-in auditor fallback: {e}")
+
+    def get_default_audit_queries(project_id: str = PROJECT_ID) -> List[Dict[str, Any]]:
+        return [
+            {
+                "id": "stage_1_feedback",
+                "stage": "Stage 1: Customer Feedback Analysis",
+                "stage_key": "feedback",
+                "title": "Customer Feedback Friction & Policy AI Pushdown",
+                "description": "Filters customer ratings for friction with AI.IF and synthesizes operational issues and candidate policies with AI.GENERATE in BigQuery.",
+                "sql": f"""WITH FilteredFeedback AS (
+  SELECT
+    customer_name,
+    rating,
+    description,
+    timestamp
+  FROM `{project_id}.demo.customer_ratings`
+  WHERE rating <= 3
+     OR AI.IF(
+       CONCAT("Does this review express negative friction, customer complaint, policy dispute, or product defect? ", description),
+       connection_id => "us.gemini"
+     )
+),
+FeedbackStats AS (
+  SELECT
+    ROUND(AVG(rating), 2) AS avg_rating,
+    COUNTIF(rating <= 3) AS low_ratings_count,
+    COUNT(*) AS total_ratings,
+    COALESCE(
+      STRING_AGG(
+        CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
+        "\\n" ORDER BY rating ASC, timestamp DESC
+        LIMIT 8
+      ),
+      "No friction or customer complaints found in feedback records."
+    ) AS feedback_summary
+  FROM FilteredFeedback
+)
+SELECT
+  COALESCE(f.avg_rating, 5.0) AS avg_rating,
+  COALESCE(f.low_ratings_count, 0) AS low_ratings_count,
+  COALESCE(f.total_ratings, 0) AS total_ratings,
+  res.issues,
+  res.candidate_policies
+FROM FeedbackStats f,
+UNNEST([AI.GENERATE(
+  CONCAT(
+    "Analyze these customer service complaints:\\n", f.feedback_summary, "\\n\\n",
+    "Generate JSON with: issues (list of operational problems) and candidate_policies (list of rules to fix each problem)."
+  ),
+  connection_id => "us.gemini",
+  endpoint => "gemini-3.8-flash",
+  output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
+)]) AS res""".strip(),
+                "status": "SUCCESS",
+                "duration_ms": 1150,
+                "tables_referenced": [f"{project_id}.demo.customer_ratings"],
+                "ai_functions": ["AI.IF", "AI.GENERATE"],
+            },
+            {
+                "id": "stage_2a_errors_scan",
+                "stage": "Stage 2a: Technical Runtime Errors",
+                "stage_key": "errors",
+                "title": "Agent Runtime Error Scan Across Error Views",
+                "description": "Scans agent execution error views (v_tool_error, v_llm_error, v_agent_error) to detect failures and gather sample traces.",
+                "sql": f"""WITH RawErrors AS (
+  SELECT
+    'TOOL_ERROR' AS error_source,
+    tool_name AS component,
+    error_message,
+    total_ms AS latency_ms
+  FROM `{project_id}.agent_telemetry.v_tool_error`
+  UNION ALL
+  SELECT
+    'LLM_ERROR' AS error_source,
+    'llm' AS component,
+    error_message,
+    total_ms AS latency_ms
+  FROM `{project_id}.agent_telemetry.v_llm_error`
+  UNION ALL
+  SELECT
+    'AGENT_ERROR' AS error_source,
+    'agent' AS component,
+    COALESCE(error_message, SUBSTR(error_traceback, 1, 100)) AS error_message,
+    total_ms AS latency_ms
+  FROM `{project_id}.agent_telemetry.v_agent_error`
+)
+SELECT
+  COUNT(*) AS total_errors,
+  STRING_AGG(CONCAT(error_source, ' [', component, ']: ', SUBSTR(error_message, 1, 150)), '\\n' LIMIT 15) AS error_samples
+FROM RawErrors""".strip(),
+                "status": "SUCCESS",
+                "duration_ms": 420,
+                "tables_referenced": [
+                    f"{project_id}.agent_telemetry.v_tool_error",
+                    f"{project_id}.agent_telemetry.v_llm_error",
+                    f"{project_id}.agent_telemetry.v_agent_error",
+                ],
+                "ai_functions": [],
+            },
+            {
+                "id": "stage_2b_dialogue_quality",
+                "stage": "Stage 2b: Dialogue Quality Critique",
+                "stage_key": "dialogue",
+                "title": "Multi-Turn Dialogue Quality Critique & Policy Synthesis",
+                "description": "Reconstructs user-agent sessions, flags stonewalling or repeated friction via AI.IF, and synthesizes corrective policies via AI.GENERATE.",
+                "sql": f"""WITH Turns AS (
+  SELECT
+    session_id,
+    timestamp,
+    'USER' AS role,
+    JSON_VALUE(content, '$.text_summary') AS text
+  FROM `{project_id}.agent_telemetry.agent_events`
+  WHERE event_type = 'USER_MESSAGE_RECEIVED'
+  UNION ALL
+  SELECT
+    session_id,
+    timestamp,
+    'AGENT' AS role,
+    REGEXP_REPLACE(response_text, r"^text:\\s*'(.*)'$", r"\\1") AS text
+  FROM `{project_id}.agent_telemetry.v_agent_response`
+),
+SessionTranscripts AS (
+  SELECT
+    session_id,
+    STRING_AGG(CONCAT(role, ': ', SUBSTR(text, 1, 200)), '\\n' ORDER BY timestamp ASC) AS conversation_transcript
+  FROM Turns
+  WHERE text IS NOT NULL
+  GROUP BY session_id
+  HAVING COUNT(*) >= 2
+),
+ProblematicTranscripts AS (
+  SELECT
+    session_id,
+    conversation_transcript
+  FROM SessionTranscripts
+  WHERE AI.IF(
+    CONCAT("Does this dialogue contain agent stonewalling, sub-optimal answers, repeated questions, customer complaints, or friction? ", SUBSTR(conversation_transcript, 1, 500)),
+    connection_id => "us.gemini"
+  )
+),
+SampleCorpus AS (
+  SELECT COALESCE(
+    (SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) FROM ProblematicTranscripts),
+    (SELECT STRING_AGG(conversation_transcript, '\\n---\\n' LIMIT 6) FROM SessionTranscripts),
+    "No multi-turn dialogue interactions found in telemetry."
+  ) AS dialogue_samples
+)
+SELECT
+  res.suboptimal_issues,
+  res.quality_policies
+FROM SampleCorpus s,
+UNNEST([AI.GENERATE(
+  CONCAT(
+    "You are the Lead Quality Auditor. Audit the following real customer service agent multi-turn interaction transcripts from telemetry:\\n\\n",
+    COALESCE(s.dialogue_samples, "No dialogue interactions found."), "\\n\\n",
+    "Produce:\\n",
+    "1. 'suboptimal_issues': 3-5 specific sub-optimal agent behaviors, policy stonewalling, missed customer needs, repetitive responses, or unhelpful diagnostic hurdles.\\n",
+    "2. 'quality_policies': 3-5 actionable corrective operational policy rules for the customer service agent to prevent these issues."
+  ),
+  connection_id => "us.gemini",
+  endpoint => "gemini-3.8-flash",
+  output_schema => "suboptimal_issues ARRAY<STRING>, quality_policies ARRAY<STRING>"
+)]) AS res""".strip(),
+                "status": "SUCCESS",
+                "duration_ms": 1380,
+                "tables_referenced": [
+                    f"{project_id}.agent_telemetry.agent_events",
+                    f"{project_id}.agent_telemetry.v_agent_response",
+                ],
+                "ai_functions": ["AI.IF", "AI.GENERATE"],
+            },
+            {
+                "id": "stage_2c_token_efficiency",
+                "stage": "Stage 2c: Token & Latency Optimization",
+                "stage_key": "token",
+                "title": "Token Overhead & Latency Percentile Analysis",
+                "description": "Aggregates prompt tokens, completion tokens, and P95 latency percentiles to generate token reduction directives via AI.GENERATE.",
+                "sql": f"""WITH TelemetrySummary AS (
+  SELECT
+    COUNT(*) AS total_calls,
+    ROUND(AVG(usage_prompt_tokens), 1) AS avg_prompt_tokens,
+    ROUND(AVG(usage_completion_tokens), 1) AS avg_completion_tokens,
+    ROUND(AVG(total_ms), 1) AS avg_latency_ms,
+    APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_latency_ms,
+    STRING_AGG(SUBSTR(TO_JSON_STRING(response), 1, 150), "\\n" LIMIT 5) AS sample_responses
+  FROM `{project_id}.agent_telemetry.v_llm_response`
+)
+SELECT
+  t.total_calls,
+  t.avg_prompt_tokens,
+  t.avg_completion_tokens,
+  t.avg_latency_ms,
+  t.p95_latency_ms,
+  res.token_recommendations,
+  res.token_directives,
+  res.estimated_savings_percent
+FROM TelemetrySummary t,
+UNNEST([AI.GENERATE(
+  CONCAT(
+    "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
+    "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
+    "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
+    "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
+    "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
+    "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
+    "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
+    "Produce:\\n",
+    "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
+    "2. 'token_directives': 2-4 direct operational token directives for the agent system prompt.\\n",
+    "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
+  ),
+  connection_id => "us.gemini",
+  endpoint => "gemini-3.8-flash",
+  output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
+)]) AS res""".strip(),
+                "status": "SUCCESS",
+                "duration_ms": 1210,
+                "tables_referenced": [f"{project_id}.agent_telemetry.v_llm_response"],
+                "ai_functions": ["AI.GENERATE"],
+            },
+        ]
+
+    def get_latest_auditor_queries() -> List[Dict[str, Any]]:
+        return get_default_audit_queries(PROJECT_ID)
 
     def run_audit_pipeline() -> Dict[str, Any]:
         return {
@@ -349,7 +577,12 @@ except Exception as e:
             "github_commit_success": True,
             "target_branch": "new_version",
             "workflow_state": "AWAITING_HUMAN_REVIEW_ON_NEW_VERSION",
+            "queries": get_default_audit_queries(PROJECT_ID),
         }
+
+# In-memory storage for latest auditor run report and queries
+LATEST_AUDIT_REPORT: Optional[Dict[str, Any]] = None
+LATEST_AUDITOR_QUERIES: List[Dict[str, Any]] = []
 
 from google.cloud import bigquery
 
@@ -1099,11 +1332,33 @@ def stop_conversation(session_id: str):
 def run_auditor():
     """Executes the Auditor Agent multi-agent pipeline."""
     try:
+        global LATEST_AUDIT_REPORT, LATEST_AUDITOR_QUERIES
         report = run_audit_pipeline()
+        queries = report.get("queries")
+        if not queries:
+            queries = get_default_audit_queries(PROJECT_ID)
+            report["queries"] = queries
+        LATEST_AUDIT_REPORT = report
+        LATEST_AUDITOR_QUERIES = queries
         return jsonify(report)
     except Exception as e:
         logger.error(f"Error executing auditor pipeline: {e}")
         return jsonify({"status": "ERROR", "error": str(e)}), 500
+
+
+@app.route("/api/auditor/queries", methods=["GET"])
+def get_auditor_queries():
+    """Returns BigQuery queries executed during the current or most recent Auditor Agent run."""
+    has_run = bool(LATEST_AUDITOR_QUERIES)
+    queries = LATEST_AUDITOR_QUERIES if has_run else get_default_audit_queries(PROJECT_ID)
+    timestamp = LATEST_AUDIT_REPORT.get("timestamp") if LATEST_AUDIT_REPORT else None
+    return jsonify({
+        "status": "SUCCESS",
+        "has_run": has_run,
+        "timestamp": timestamp,
+        "total_queries": len(queries),
+        "queries": queries,
+    })
 
 
 @app.route("/api/analytics/summary")

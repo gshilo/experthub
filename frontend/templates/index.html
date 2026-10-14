@@ -440,6 +440,100 @@
       word-break: break-word;
     }
 
+    /* Auditor BigQuery Queries Modal & Cards */
+    .filter-pill {
+      background: rgba(148, 163, 184, 0.1);
+      color: #94a3b8;
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .filter-pill:hover {
+      background: rgba(139, 92, 246, 0.15);
+      color: #c084fc;
+      border-color: rgba(139, 92, 246, 0.4);
+    }
+    .filter-pill.active {
+      background: rgba(139, 92, 246, 0.25);
+      color: #f3e8ff;
+      border-color: #a855f7;
+      font-weight: 600;
+    }
+    .query-card {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      transition: border-color 0.15s ease;
+    }
+    .query-card:hover {
+      border-color: rgba(139, 92, 246, 0.4);
+    }
+    .query-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 0.4rem;
+      flex-wrap: wrap;
+    }
+    .query-card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .query-card-desc {
+      font-size: 0.825rem;
+      color: #94a3b8;
+      margin-bottom: 0.65rem;
+      line-height: 1.45;
+    }
+    .query-sql-box {
+      position: relative;
+      background: #040711;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      overflow: hidden;
+      margin-top: 0.5rem;
+    }
+    .query-sql-box pre {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: #a5f3fc;
+      overflow-x: auto;
+      white-space: pre;
+      max-height: 280px;
+    }
+    .query-meta-bar {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 0.65rem;
+    }
+    .query-tag {
+      font-size: 0.72rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(30, 41, 59, 0.8);
+      color: #94a3b8;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
     /* Analytics Dashboard */
     .kpi-row {
       display: grid;
@@ -614,9 +708,14 @@
             <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 1rem; line-height: 1.4;">
               Audits interaction telemetry in BigQuery, designs token optimizations, and commits refined Open Knowledge Format (OKF v0.2) rules directly to GitHub.
             </p>
-            <button class="btn btn-purple" id="btn-auditor" onclick="runAuditorAgent()">
-              🔍 Run Auditor Agent
-            </button>
+            <div class="btn-group" style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
+              <button class="btn btn-purple" id="btn-auditor" onclick="runAuditorAgent()">
+                🔍 Run Auditor Agent
+              </button>
+              <button class="btn btn-outline" id="btn-auditor-queries" onclick="openAuditorQueriesModal()" disabled title="Run the Auditor Agent first to view queries from the current run">
+                📊 View BigQuery Queries
+              </button>
+            </div>
 
             <div class="auditor-box" id="auditor-results" style="margin-top: 1.25rem; display: none;">
               <div style="font-size: 0.85rem; font-weight: 600; color: #a78bfa; margin-bottom: 0.4rem;">
@@ -739,6 +838,51 @@
             📋 Copy instructions
           </button>
           <button class="btn btn-primary" onclick="closeInstructions()">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Auditor BigQuery Queries -->
+  <div id="auditor-queries-modal" class="modal-overlay" onclick="handleAuditorQueriesModalOverlayClick(event)">
+    <div class="modal-container" style="max-width: 960px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📊 Auditor Agent BigQuery Queries</span>
+          <span class="badge" id="queries-run-badge" style="background: rgba(139, 92, 246, 0.2); color: #c084fc; border-color: rgba(139, 92, 246, 0.4);">● Current Run</span>
+        </div>
+        <button class="btn btn-outline" style="padding: 0.25rem 0.6rem; font-size: 1rem; border-radius: 6px;" onclick="closeAuditorQueriesModal()" title="Close (Esc)">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.85rem; line-height: 1.45;">
+          SQL queries executed by the Auditor Agent multi-stage pipeline using in-database <strong>BigQuery AI Functions</strong> (<code style="color: #c084fc;">AI.IF</code>, <code style="color: #c084fc;">AI.GENERATE</code>) to audit customer feedback, detect telemetry errors, and synthesize token efficiency directives.
+        </p>
+
+        <!-- Stage Filter Pills -->
+        <div class="query-filter-bar" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
+          <button class="filter-pill active" id="pill-all" onclick="filterAuditorQueries('all', this)">All Stages (<span id="query-count-all">0</span>)</button>
+          <button class="filter-pill" id="pill-feedback" onclick="filterAuditorQueries('feedback', this)">Stage 1: Feedback</button>
+          <button class="filter-pill" id="pill-errors" onclick="filterAuditorQueries('errors', this)">Stage 2a: Errors</button>
+          <button class="filter-pill" id="pill-dialogue" onclick="filterAuditorQueries('dialogue', this)">Stage 2b: Dialogue Quality</button>
+          <button class="filter-pill" id="pill-token" onclick="filterAuditorQueries('token', this)">Stage 2c: Token Efficiency</button>
+        </div>
+
+        <!-- Queries List Container -->
+        <div id="auditor-queries-list" style="display: flex; flex-direction: column; gap: 1rem;">
+          <div style="text-align: center; color: #64748b; padding: 2rem 0; font-style: italic;">
+            Loading BigQuery queries...
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span style="font-size: 0.75rem; color: #64748b;" id="queries-footer-meta">Source: Auditor Agent &bull; In-Database BigQuery AI Pushdown</span>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-outline" id="btn-copy-all-queries" onclick="copyAllAuditorQueries()">
+            📋 Copy All Queries
+          </button>
+          <button class="btn btn-primary" onclick="closeAuditorQueriesModal()">
             Close
           </button>
         </div>
@@ -1098,8 +1242,178 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeInstructions();
+        closeAuditorQueriesModal();
       }
     });
+
+    // Auditor Queries Modal & State
+    let currentAuditorQueries = [];
+    let activeAuditorQueryFilter = 'all';
+
+    function openAuditorQueriesModal() {
+      const modal = document.getElementById('auditor-queries-modal');
+      if (modal) modal.style.display = 'flex';
+
+      if (!currentAuditorQueries || currentAuditorQueries.length === 0) {
+        fetch('/api/auditor/queries')
+          .then(r => r.json())
+          .then(data => {
+            currentAuditorQueries = data.queries || [];
+            renderAuditorQueries(activeAuditorQueryFilter);
+          })
+          .catch(err => {
+            console.error('Error fetching auditor queries:', err);
+            renderAuditorQueries(activeAuditorQueryFilter);
+          });
+      } else {
+        renderAuditorQueries(activeAuditorQueryFilter);
+      }
+    }
+
+    function closeAuditorQueriesModal() {
+      const modal = document.getElementById('auditor-queries-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function handleAuditorQueriesModalOverlayClick(e) {
+      if (e.target && e.target.id === 'auditor-queries-modal') {
+        closeAuditorQueriesModal();
+      }
+    }
+
+    function filterAuditorQueries(filterKey, pillEl) {
+      activeAuditorQueryFilter = filterKey;
+      document.querySelectorAll('#auditor-queries-modal .filter-pill').forEach(p => p.classList.remove('active'));
+      if (pillEl) pillEl.classList.add('active');
+      renderAuditorQueries(filterKey);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function renderAuditorQueries(filter = 'all') {
+      const listContainer = document.getElementById('auditor-queries-list');
+      const countAllEl = document.getElementById('query-count-all');
+      if (!listContainer) return;
+
+      if (!currentAuditorQueries || currentAuditorQueries.length === 0) {
+        listContainer.innerHTML = `
+          <div style="text-align: center; color: #64748b; padding: 2.5rem 0; font-style: italic;">
+            No queries recorded yet. Click "Run Auditor Agent" to execute queries against BigQuery.
+          </div>
+        `;
+        if (countAllEl) countAllEl.innerText = '0';
+        return;
+      }
+
+      if (countAllEl) countAllEl.innerText = currentAuditorQueries.length;
+
+      const filtered = (filter === 'all')
+        ? currentAuditorQueries
+        : currentAuditorQueries.filter(q => q.stage_key === filter || (q.id && q.id.includes(filter)));
+
+      if (filtered.length === 0) {
+        listContainer.innerHTML = `
+          <div style="text-align: center; color: #64748b; padding: 2rem 0; font-style: italic;">
+            No queries recorded for this stage filter.
+          </div>
+        `;
+        return;
+      }
+
+      listContainer.innerHTML = filtered.map(q => {
+        const queryIdx = currentAuditorQueries.indexOf(q);
+        const statusBadge = q.status === 'SUCCESS'
+          ? `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3);">✓ ${q.duration_ms ? q.duration_ms + 'ms' : 'Executed'}</span>`
+          : `<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3);">✕ Failed</span>`;
+
+        const aiTags = (q.ai_functions || []).map(fn => `<span class="query-tag" style="color: #c084fc; border-color: rgba(168, 85, 247, 0.3);"><strong style="color: #a855f7;">AI:</strong> ${escapeHtml(fn)}</span>`).join(' ');
+        const tableTags = (q.tables_referenced || []).map(tb => `<span class="query-tag" style="color: #93c5fd;"><strong style="color: #60a5fa;">TABLE:</strong> ${escapeHtml(tb)}</span>`).join(' ');
+
+        return `
+          <div class="query-card" id="query-card-${queryIdx}">
+            <div class="query-card-header">
+              <div>
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem;">
+                  <span class="badge" style="background: rgba(139, 92, 246, 0.15); color: #c084fc; font-weight: 600;">${escapeHtml(q.stage || 'Audit Query')}</span>
+                  ${statusBadge}
+                </div>
+                <div class="query-card-title">${escapeHtml(q.title || 'BigQuery Pushdown Query')}</div>
+              </div>
+              <button class="btn btn-outline" style="padding: 0.25rem 0.65rem; font-size: 0.75rem; border-radius: 6px;" onclick="copyAuditorQuerySql(${queryIdx}, this)" title="Copy this SQL query to clipboard">
+                📋 Copy SQL
+              </button>
+            </div>
+            <div class="query-card-desc">${escapeHtml(q.description || '')}</div>
+            <div class="query-sql-box">
+              <pre><code>${escapeHtml(q.sql || '')}</code></pre>
+            </div>
+            ${(aiTags || tableTags) ? `<div class="query-meta-bar">${aiTags} ${tableTags}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function copyAuditorQuerySql(queryIdx, btn) {
+      if (!currentAuditorQueries || !currentAuditorQueries[queryIdx]) return;
+      const sql = currentAuditorQueries[queryIdx].sql || '';
+      navigator.clipboard.writeText(sql).then(() => {
+        if (btn) {
+          const orig = btn.innerText;
+          btn.innerText = '✓ Copied!';
+          setTimeout(() => { btn.innerText = orig; }, 2000);
+        }
+      }).catch(err => {
+        console.warn('Clipboard write failed:', err);
+      });
+    }
+
+    function copyAllAuditorQueries() {
+      if (!currentAuditorQueries || currentAuditorQueries.length === 0) return;
+      const allText = currentAuditorQueries.map((q, i) => {
+        return `-- ====================================================================\n` +
+               `-- ${q.stage || ('Query ' + (i + 1))}: ${q.title || ''}\n` +
+               `-- ${q.description || ''}\n` +
+               `-- ====================================================================\n` +
+               `${q.sql}\n;`;
+      }).join('\n\n');
+
+      const btn = document.getElementById('btn-copy-all-queries');
+      navigator.clipboard.writeText(allText).then(() => {
+        if (btn) {
+          const orig = btn.innerText;
+          btn.innerText = '✓ All Copied!';
+          setTimeout(() => { btn.innerText = orig; }, 2000);
+        }
+      }).catch(err => {
+        console.warn('Clipboard write failed:', err);
+      });
+    }
+
+    async function checkExistingAuditorQueries() {
+      try {
+        const res = await fetch('/api/auditor/queries');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.queries && data.queries.length > 0) {
+          currentAuditorQueries = data.queries;
+          const btn = document.getElementById('btn-auditor-queries');
+          if (btn) {
+            btn.disabled = false;
+            btn.title = data.has_run ? 'View queries executed during the current auditor run' : 'View audit queries against BigQuery';
+          }
+        }
+      } catch (e) {
+        console.warn('Could not check existing auditor queries:', e);
+      }
+    }
 
     // Run Auditor Agent
     async function runAuditorAgent() {
@@ -1110,6 +1424,16 @@
       try {
         const res = await fetch('/api/auditor/run', { method: 'POST' });
         const report = await res.json();
+
+        // Update queries state and enable button
+        if (report.queries && report.queries.length > 0) {
+          currentAuditorQueries = report.queries;
+          const qBtn = document.getElementById('btn-auditor-queries');
+          if (qBtn) {
+            qBtn.disabled = false;
+            qBtn.title = 'View the BigQuery queries used in the current run';
+          }
+        }
 
         const box = document.getElementById('auditor-results');
         const issuesList = document.getElementById('auditor-issues-list');
@@ -1371,6 +1695,9 @@
         loadAnalyticsData();
       }
     }, 15000);
+
+    // Initial check for auditor queries on load
+    checkExistingAuditorQueries();
   </script>
 </body>
 </html>
