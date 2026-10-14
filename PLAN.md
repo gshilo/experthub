@@ -58,7 +58,7 @@ Generate the following exact folder hierarchy and files:
     ├── README.md                      # Flask app documentation, Cloud Run deployment, and dashboard metrics
     ├── app.py                         # Flask backend wiring Agent Engine endpoints and BigQuery analytics queries
     ├── templates/
-    │   └── index.html                 # Two-tab UI (Live Conversation + Auditor & Telemetry Dashboard)
+    │   └── index.html                 # Three-tab UI (Live Conversation, Telemetry Analytics Dashboard, and Customer Analysis with A2UI 0.9.1)
     ├── Dockerfile                     # Production container definition for Cloud Run
     └── requirements.txt               # Dependencies
 ```
@@ -546,4 +546,51 @@ To provide complete transparency into the self-improving agent system and enable
   - Monospace scrollable container (`#instructions-content` / `#instructions-text`) displays complete instructions with line-wrapped formatting.
 * **Inline Container (`#instructions-inline-container`):**
   - Provides a complementary inline viewer (`#instructions-display`) within the main workspace card for continuous visibility.
+
+---
+
+## 13. Customer Analysis Tab, BigQuery AI Pushdown & A2UI 0.9.1 Implementation
+
+### 1. Architectural Motivation & User Story
+To provide a dedicated analytical view into customer feedback, sentiment, satisfaction, and product defect metrics:
+* A new third tab named **Customer Analysis (Auditor AI & A2UI)** is added to the frontend.
+* The backend for this tab is powered directly by the **Auditor Agent**, enforcing in-database BigQuery AI pushdown without shipping raw feedback to Python LLMs.
+* The tab contains two core sections:
+  1. **Top Section: Static Dashboard** displaying customer sentiment, satisfaction (stars + verbal feedback themes), and product ratings by returns and defects.
+  2. **Bottom Section: Dynamic Query & A2UI 0.9.1 Visualizations** allowing users to query customer feedback in natural language, pushing down reasoning to BigQuery AI functions and dynamically rendering responsive UI components using the **A2UI 0.9.1** protocol.
+
+### 2. Component Implementation Details
+
+#### A. Auditor Agent (`auditor_agent/agent.py`)
+* **`query_customer_analysis_static_bq(project_id)`:**
+  - Pushes down sentiment categorization, CSAT star metrics, verbal feedback synthesis (`AI.GENERATE` on `demo.customer_ratings`), and product return and defect rate calculations.
+  - Returns structured KPI summaries, sentiment breakdown, satisfaction themes (praises/complaints), product ratings, and executed query trace metadata.
+* **`process_customer_analysis_query(question, project_id)`:**
+  - Translates user questions into BigQuery SQL incorporating BigQuery AI functions (`AI.GENERATE`, `AI.IF`, `AI.CLASSIFY`).
+  - Executes queries using BigQuery client and records execution duration and referenced tables.
+  - Formulates responses into **A2UI 0.9.1** protocol message arrays (`createSurface`, `updateComponents`, `updateDataModel`) adhering to the v0.9.1 adjacency list component model (`a2ui.Card`, `a2ui.Row`, `a2ui.Column`, `a2ui.Text`, `a2ui.Metric`, `a2ui.Table`, and `a2ui.Chart`).
+* **Tool Registration:** Both functions are registered in `_auditor_tools` for direct ADK tool invocation.
+
+#### B. Frontend Backend Orchestration (`frontend/app.py`)
+* **`GET /api/customer-analysis/dashboard`:**
+  - Retrieves static dashboard metrics from `query_customer_analysis_static_bq()`.
+  - Implements in-memory caching with 60-second TTL and support for `?refresh=true` to force live re-computation.
+* **`POST /api/customer-analysis/query`:**
+  - Handles natural language questions via `process_customer_analysis_query()`.
+  - Returns A2UI 0.9.1 JSON payload, query execution trace, and summary narrative.
+
+#### C. Frontend User Experience (`frontend/templates/index.html`)
+* **Tab Navigation:** Added "Customer Analysis (Auditor AI & A2UI)" tab button (`tab-button-customer-analysis`).
+* **Static Dashboard (Top):**
+  - KPI metric cards (Overall CSAT, Sentiment Positivity, Total Feedback Reviews, Total Returns).
+  - Chart.js Customer Sentiment doughnut chart and CSAT Star Rating bar chart.
+  - AI-generated verbal feedback theme lists (key praises and policy friction complaints).
+  - Product Rating by Returns & Defects table displaying models, categories, ratings, return counts, defect rates, and primary reported issues.
+  - Expandable BigQuery AI Pushdown Execution Trace showing duration, AI functions used, and SQL query.
+* **Dynamic Natural Language Query & A2UI 0.9.1 (Bottom):**
+  - Clickable suggestion chips ("Top defect complaints by product", "Negative verbal feedback drivers", "Return reasons vs star ratings", "Appliance sentiment breakdown") for 1-click execution.
+  - Natural language input bar with submit button and live execution spinner.
+  - Native **A2UI 0.9.1** protocol client engine rendering `createSurface`, `updateComponents`, and `updateDataModel` messages dynamically.
+  - Expandable Auditor SQL Execution panel showing executed SQL, AI functions, duration, and row counts.
+  - Interactive "View A2UI 0.9.1 JSON" inspector modal with raw JSON preview and copy functionality.
 
