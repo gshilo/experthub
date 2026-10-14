@@ -4,15 +4,18 @@
 The **Auditor Agent** is an autonomous quality, latency, and token-efficiency inspection engine for the customer service platform. Built using **Google Agent Development Kit (ADK 2.0)** and powered by **Gemini 3.8 Flash** (`gemini-3.8-flash`), it executes a sequential multi-agent workflow to evaluate live interactions, compress prompt token usage, and automatically publish refined rules in Open Knowledge Format (OKF v0.2) to GitHub.
 
 ## 2. Multi-Agent Sequential Architecture
-The Auditor coordinates three specialized sub-agents:
+The Auditor coordinates three specialized sub-agents with an **In-Database BigQuery AI Pushdown Architecture**:
 1. **Telemetry & Feedback Analyzer Sub-Agent:**
    * Queries BigQuery dataset `agent_telemetry` and table `demo.customer_ratings`.
+   * Pushes down AI analysis to BigQuery using **`AI.IF`** for semantic filtering of customer friction and sub-optimal dialogues, and **`AI.GENERATE`** for actionable rule formulation.
    * Flags low customer ratings (≤3/5), policy mistakes, and latency spikes exceeding 3.5 seconds.
 2. **Token Efficiency Optimizer Sub-Agent:**
-   * Analyzes prompt and completion tokens.
-   * Eliminates boilerplate pleasantries and formulates structured brevity directives for a 20–35% token reduction.
+   * Analyzes prompt and completion tokens dynamically via BigQuery AI metrics pushdown.
+   * Eliminates boilerplate pleasantries and formulates structured brevity directives for a 20–45% token reduction with zero static templates.
 3. **OKF Rule Author & Committer Sub-Agent:**
    * Generates formal YAML + Markdown rules strictly conforming to the **Open Knowledge Format (OKF v0.2)** specification.
+   * **100% Dynamic Rule Formulation:** Formulates rules dynamically based purely on current telemetry and customer feedback findings. Zero hardcoded rule templates.
+   * **Legacy Rule Scrubbing & Deduplication:** Automatically purges any legacy static rules and deduplicates candidate rules using semantic token similarity.
    * Accesses GitHub credentials securely from **Google Cloud Secret Manager** (SSH deploy key `github-deploy-key` or PAT `github-pat`).
    * **Branch Interaction Rules:**
      * If `dynamic_context.md` is missing in `main` branch, creates it directly on `main`.
