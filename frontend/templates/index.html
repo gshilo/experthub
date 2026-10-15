@@ -709,6 +709,131 @@
       box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
     }
 
+    .ca-feed-container {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      margin-top: 1rem;
+      margin-bottom: 1.5rem;
+      max-height: 800px;
+      overflow-y: auto;
+      padding-right: 0.5rem;
+    }
+
+    .ca-turn {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      animation: messageAppear 0.25s ease-out;
+    }
+
+    .ca-user-bubble {
+      align-self: flex-end;
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.3), rgba(59, 130, 246, 0.4));
+      border: 1px solid rgba(96, 165, 250, 0.5);
+      color: #f8fafc;
+      padding: 0.85rem 1.25rem;
+      border-radius: 14px 14px 4px 14px;
+      max-width: 80%;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .ca-user-header {
+      font-size: 0.75rem;
+      color: #93c5fd;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .ca-auditor-card {
+      align-self: flex-start;
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    }
+
+    .ca-auditor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.85rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+    }
+
+    .advisory-section-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-top: 1rem;
+      margin-bottom: 0.45rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .advisory-list-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      color: #cbd5e1;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      margin-bottom: 0.4rem;
+    }
+
+    .advisory-list-item.bullet .item-bullet {
+      color: #60a5fa;
+      font-size: 0.65rem;
+      margin-top: 0.35rem;
+    }
+
+    .advisory-list-item.numbered .item-num {
+      color: #38bdf8;
+      font-weight: 700;
+      min-width: 1.2rem;
+    }
+
+    .ca-sql-drawer {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(51, 65, 85, 0.7);
+      border-radius: 8px;
+      margin-top: 0.85rem;
+      overflow: hidden;
+    }
+
+    .ca-sql-drawer-header {
+      padding: 0.6rem 0.85rem;
+      background: rgba(30, 41, 59, 0.5);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .ca-sql-drawer-header:hover {
+      color: #f1f5f9;
+      background: rgba(30, 41, 59, 0.8);
+    }
+
+    .ca-turn-suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+      padding-top: 0.75rem;
+      border-top: 1px dashed rgba(51, 65, 85, 0.5);
+    }
+
     .a2ui-surface {
       background: #090e1a;
       border: 1px solid var(--border);
@@ -1275,31 +1400,37 @@
           </div>
         </div>
 
-        <!-- Suggestion Chips -->
-        <div style="margin-bottom: 0.5rem; font-size: 0.78rem; color: #94a3b8;">Suggested Analysis Inquiries:</div>
+        <!-- Suggestion Chips: Highlighting Quantitative & Conversational Modalities -->
+        <div style="margin-bottom: 0.5rem; font-size: 0.78rem; color: #94a3b8; display: flex; justify-content: space-between; align-items: center;">
+          <span>Suggested Inquiries (Data Visualization & Conversational Guidance):</span>
+          <span style="font-size: 0.72rem; color: #60a5fa;">● Dual-Functional Auditor AI</span>
+        </div>
         <div class="suggestion-chips">
-          <button class="chip-btn" onclick="useQueryChip('User satisfaction and sentiment over time')">
-            📈 Satisfaction over time
+          <button class="chip-btn" onclick="useQueryChip('What is the percentage of positive customer interactions over time')">
+            📈 Positive interactions over time
+          </button>
+          <button class="chip-btn" onclick="useQueryChip('What do you suggest us to do in order to improve customer experience ?')">
+            💡 What do you suggest to improve CX?
           </button>
           <button class="chip-btn" onclick="useQueryChip('Top defect complaints by product')">
             🔍 Top defect complaints by product
           </button>
-          <button class="chip-btn" onclick="useQueryChip('Negative verbal feedback drivers')">
-            🗣️ Negative verbal feedback drivers
+          <button class="chip-btn" onclick="useQueryChip('How can we optimize agent response latency and token usage?')">
+            ⚡ Optimize latency & tokens
           </button>
           <button class="chip-btn" onclick="useQueryChip('Return reasons vs star ratings')">
             📦 Return reasons vs star ratings
-          </button>
-          <button class="chip-btn" onclick="useQueryChip('Appliance sentiment breakdown')">
-            ⚡ Appliance sentiment breakdown
           </button>
         </div>
 
         <!-- Natural Language Input Bar -->
         <div class="nl-search-bar">
-          <input type="text" id="nl-query-input" class="nl-input" placeholder="Ask the Auditor agent about customer feedback, returns, sentiment, or defects..." onkeydown="handleQueryInputKey(event)">
+          <input type="text" id="nl-query-input" class="nl-input" placeholder="Ask for data visualizations or open-ended strategic advice (e.g. 'What do you suggest us to do?')..." onkeydown="handleQueryInputKey(event)">
           <button class="btn btn-primary" id="btn-submit-nl-query" onclick="submitCustomerAnalysisQuery()">
             Ask Auditor Agent
+          </button>
+          <button class="btn btn-outline" id="btn-clear-ca-chat" onclick="clearCustomerAnalysisChat()" title="Start New Conversation">
+            ↺ New Session
           </button>
         </div>
 
@@ -1307,33 +1438,37 @@
         <div id="nl-query-loading" style="display: none; padding: 1.5rem; text-align: center; background: rgba(15, 23, 42, 0.6); border-radius: 8px; border: 1px dashed var(--border); margin-bottom: 1rem;">
           <div style="display: inline-flex; align-items: center; gap: 0.75rem; color: #60a5fa; font-size: 0.9rem;">
             <span class="dot dot-live"></span>
-            <span>Auditor Agent pushing down reasoning to BigQuery AI (<code style="color: #a78bfa;">AI.IF</code>, <code style="color: #a78bfa;">AI.GENERATE</code>)...</span>
+            <span>Auditor Agent pushing down reasoning to BigQuery AI (<code style="color: #a78bfa;">AI.IF</code>, <code style="color: #a78bfa;">AI.GENERATE</code>, <code style="color: #a78bfa;">AI.CLASSIFY</code>)...</span>
           </div>
         </div>
 
-        <!-- Expandable Dynamic Query SQL & Execution Metadata -->
-        <div id="nl-query-meta-panel" style="display: none; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem;">
-          <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleDynamicSqlTrace()">
-            <div style="display: flex; align-items: center; gap: 0.6rem;">
-              <span class="badge badge-active" style="font-size: 0.72rem;">● Auditor SQL Executed</span>
-              <span style="font-size: 0.82rem; font-weight: 500; color: #f1f5f9;" id="nl-query-title">Query Execution</span>
-              <span style="font-size: 0.75rem; color: #64748b;" id="nl-query-stats">Duration: - | Rows: -</span>
+        <!-- Unified Conversational & Visualization Feed Container -->
+        <div id="ca-conversation-feed" class="ca-feed-container">
+          <div class="ca-turn" id="ca-initial-welcome">
+            <div class="ca-auditor-card" style="border-left: 3px solid #3b82f6;">
+              <div class="ca-auditor-header">
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                  <span class="badge" style="background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd;">
+                    🤖 Lead System Auditor Ready
+                  </span>
+                  <span style="font-size: 0.82rem; font-weight: 500; color: #f1f5f9;">Dual-Capability In-Database AI</span>
+                </div>
+                <span style="font-size: 0.75rem; color: #64748b;">Telemetry & Feedback Engine</span>
+              </div>
+              <div style="font-size: 0.9rem; color: #cbd5e1; line-height: 1.55;">
+                Welcome! I evaluate customer service sessions, telemetry latencies, and customer sentiment with in-database BigQuery AI inference. You can query me with:
+                <ul style="margin: 0.5rem 0 0.5rem 1.25rem; color: #94a3b8;">
+                  <li><strong>Data Visualizations & SQL:</strong> e.g., <em>"What is the percentage of positive customer interactions over time"</em> or <em>"Top defect complaints by product"</em>.</li>
+                  <li><strong>Open-Ended Strategic Advice:</strong> e.g., <em>"What do you suggest us to do in order to improve customer experience ?"</em> or <em>"How can we optimize token usage?"</em>.</li>
+                </ul>
+                Multi-turn conversation context is preserved so you can ask follow-up questions at any point.
+              </div>
             </div>
-            <span style="font-size: 0.75rem; color: #60a5fa;" id="dynamic-sql-toggle-text">Show BigQuery SQL ▾</span>
-          </div>
-          <div id="dynamic-sql-trace-body" style="display: none; margin-top: 0.75rem;">
-            <pre class="ca-sql-box" id="nl-query-sql-code"></pre>
           </div>
         </div>
 
-        <!-- Rendered A2UI 0.9.1 Surface Container -->
-        <div id="a2ui-surface-container" class="a2ui-surface">
-          <div style="text-align: center; color: #64748b; padding: 2.5rem 1rem;">
-            <div style="font-size: 1.75rem; margin-bottom: 0.5rem;">🤖</div>
-            <div style="font-weight: 500; color: #94a3b8;">A2UI 0.9.1 Surface Container Ready</div>
-            <div style="font-size: 0.8rem; margin-top: 0.25rem;">Select a suggestion chip above or enter a question to render dynamic AI visualizations.</div>
-          </div>
-        </div>
+        <!-- Legacy Surface Container Hidden for Compatibility -->
+        <div id="a2ui-surface-container" style="display: none;"></div>
       </div>
     </div>
   </main>
@@ -2643,6 +2778,214 @@
       }
     }
 
+    // Multi-turn conversation state for Customer Analysis Auditor Agent
+    let caConversationHistory = [];
+    let caTurnCounter = 0;
+    const a2uiChartInstances = new Map();
+
+    function formatMarkdownAdvisory(markdownText) {
+      if (!markdownText) return '';
+      let escaped = markdownText
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      
+      let html = escaped
+        .replace(/^### (.*$)/gim, '<div class="advisory-section-title">$1</div>')
+        .replace(/^## (.*$)/gim, '<div class="advisory-section-title" style="font-size: 1.05rem;">$1</div>')
+        .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+        .replace(/^(\d+)\.\s+(.*$)/gim, '<div class="advisory-list-item numbered"><span class="item-num">$1.</span><span>$2</span></div>')
+        .replace(/^-\s+(.*$)/gim, '<div class="advisory-list-item bullet"><span class="item-bullet">●</span><span>$1</span></div>')
+        .replace(/\n\n/g, '<div style="margin: 0.6rem 0;"></div>');
+      return html;
+    }
+
+    function appendCaUserTurn(question) {
+      const feed = document.getElementById('ca-conversation-feed');
+      if (!feed) return;
+      const turnEl = document.createElement('div');
+      turnEl.className = 'ca-turn';
+      turnEl.innerHTML = `
+        <div class="ca-user-bubble">
+          <div class="ca-user-header">
+            <span>👤 You</span>
+          </div>
+          <div>${escapeHtml(question)}</div>
+        </div>
+      `;
+      feed.appendChild(turnEl);
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function appendCaErrorTurn(errorMsg) {
+      const feed = document.getElementById('ca-conversation-feed');
+      if (!feed) return;
+      const turnEl = document.createElement('div');
+      turnEl.className = 'ca-turn';
+      turnEl.innerHTML = `
+        <div class="ca-auditor-card" style="border-left: 3px solid #f43f5e;">
+          <div style="color: #f43f5e; font-weight: 500;">⚠️ Error executing Auditor query</div>
+          <div style="color: #cbd5e1; font-size: 0.85rem; margin-top: 0.25rem;">${escapeHtml(errorMsg)}</div>
+        </div>
+      `;
+      feed.appendChild(turnEl);
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function toggleTurnSqlTrace(turnId) {
+      const body = document.getElementById(`ca-sql-body-${turnId}`);
+      const text = document.getElementById(`ca-sql-toggle-text-${turnId}`);
+      if (body) {
+        const isOpen = body.style.display === 'block';
+        body.style.display = isOpen ? 'none' : 'block';
+        if (text) text.innerText = isOpen ? 'Show BigQuery SQL ▾' : 'Hide BigQuery SQL ▴';
+      }
+    }
+
+    function clearCustomerAnalysisChat() {
+      caConversationHistory = [];
+      caTurnCounter = 0;
+      a2uiChartInstances.forEach(chart => chart.destroy());
+      a2uiChartInstances.clear();
+      
+      const feed = document.getElementById('ca-conversation-feed');
+      if (feed) {
+        feed.innerHTML = `
+          <div class="ca-turn" id="ca-initial-welcome">
+            <div class="ca-auditor-card" style="border-left: 3px solid #3b82f6;">
+              <div class="ca-auditor-header">
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                  <span class="badge" style="background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd;">
+                    🤖 Lead System Auditor Ready
+                  </span>
+                  <span style="font-size: 0.82rem; font-weight: 500; color: #f1f5f9;">Dual-Capability In-Database AI</span>
+                </div>
+                <span style="font-size: 0.75rem; color: #64748b;">Telemetry & Feedback Engine</span>
+              </div>
+              <div style="font-size: 0.9rem; color: #cbd5e1; line-height: 1.55;">
+                Welcome! I evaluate customer service sessions, telemetry latencies, and customer sentiment with in-database BigQuery AI inference. You can query me with:
+                <ul style="margin: 0.5rem 0 0.5rem 1.25rem; color: #94a3b8;">
+                  <li><strong>Data Visualizations & SQL:</strong> e.g., <em>"What is the percentage of positive customer interactions over time"</em> or <em>"Top defect complaints by product"</em>.</li>
+                  <li><strong>Open-Ended Strategic Advice:</strong> e.g., <em>"What do you suggest us to do in order to improve customer experience ?"</em> or <em>"How can we optimize token usage?"</em>.</li>
+                </ul>
+                Multi-turn conversation context is preserved so you can ask follow-up questions at any point.
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      const input = document.getElementById('nl-query-input');
+      if (input) input.value = '';
+    }
+
+    function renderAuditorTurn(data, question) {
+      const feed = document.getElementById('ca-conversation-feed');
+      if (!feed) return;
+
+      caTurnCounter++;
+      const turnId = caTurnCounter;
+      const responseType = data.response_type || (data.verbal_response ? 'conversational_verbal' : 'chart_and_sql');
+      const isConv = responseType === 'conversational_verbal';
+      const isDual = responseType === 'dual';
+      const isChart = responseType === 'chart_and_sql' || isDual;
+
+      const qr = data.query_record || {};
+      const aiFuncs = (qr.ai_functions || []).join(', ') || 'AI.GENERATE';
+      const durationMs = qr.duration_ms || '-';
+      const sqlText = qr.sql || '-- BigQuery AI SQL';
+
+      let badgeText = '🤖 Auditor: Data & Visualization Analysis';
+      let badgeStyle = 'background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd;';
+      let cardBorder = '#3b82f6';
+
+      if (isDual) {
+        badgeText = '🤖 Auditor: Dual Visual & Advisory Analysis';
+        badgeStyle = 'background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.4); color: #c084fc;';
+        cardBorder = '#a855f7';
+      } else if (isConv) {
+        badgeText = '🤖 Auditor: Conversational Advisory';
+        badgeStyle = 'background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7;';
+        cardBorder = '#10b981';
+      }
+
+      const turnEl = document.createElement('div');
+      turnEl.className = 'ca-turn';
+      turnEl.id = `ca-turn-${turnId}`;
+
+      let contentHtml = '';
+
+      // If conversational or dual, show structured verbal response
+      if (isConv || isDual) {
+        if (data.verbal_response) {
+          contentHtml += `<div class="ca-verbal-block" style="margin-bottom: 0.75rem;">${formatMarkdownAdvisory(data.verbal_response)}</div>`;
+        }
+      } else if (data.answer_summary) {
+        contentHtml += `<div style="color: #cbd5e1; font-size: 0.9rem; line-height: 1.5; margin-bottom: 0.75rem;">${escapeHtml(data.answer_summary)}</div>`;
+      }
+
+      // If chart is needed, add slot for A2UI components
+      if (isChart) {
+        contentHtml += `<div id="a2ui-surface-turn-${turnId}" class="a2ui-turn-surface" style="margin-top: 0.5rem;"></div>`;
+      }
+
+      // Build turn suggestions
+      let suggestionsHtml = '';
+      if (data.suggestions && Array.isArray(data.suggestions) && data.suggestions.length > 0) {
+        suggestionsHtml = `
+          <div class="ca-turn-suggestions">
+            <span style="font-size: 0.75rem; color: #94a3b8; width: 100%; margin-bottom: 0.2rem;">Follow-up inquiries:</span>
+            ${data.suggestions.map(s => `<button class="chip-btn" style="padding: 0.25rem 0.6rem; font-size: 0.76rem;" onclick="useQueryChip('${escapeHtml(s).replace(/'/g, "\\'")}')">${escapeHtml(s)}</button>`).join('')}
+          </div>
+        `;
+      }
+
+      // SQL Drawer
+      const sqlDrawerHtml = `
+        <div class="ca-sql-drawer">
+          <div class="ca-sql-drawer-header" onclick="toggleTurnSqlTrace(${turnId})">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span class="badge badge-active" style="font-size: 0.68rem;">● BigQuery SQL Executed</span>
+              <span style="font-size: 0.78rem; color: #f1f5f9; font-weight: 500;">${escapeHtml(qr.title || 'Dynamic Query')}</span>
+              <span style="font-size: 0.72rem; color: #64748b;">${durationMs}ms | AI: ${aiFuncs}</span>
+            </div>
+            <span style="font-size: 0.72rem; color: #60a5fa;" id="ca-sql-toggle-text-${turnId}">Show BigQuery SQL ▾</span>
+          </div>
+          <div id="ca-sql-body-${turnId}" style="display: none; padding: 0.75rem;">
+            <pre class="ca-sql-box" style="margin: 0; max-height: 220px; overflow-y: auto;">${escapeHtml(sqlText)}</pre>
+          </div>
+        </div>
+      `;
+
+      turnEl.innerHTML = `
+        <div class="ca-auditor-card" style="border-left: 3px solid ${cardBorder};">
+          <div class="ca-auditor-header">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+              <span class="badge" style="${badgeStyle}">
+                ${badgeText}
+              </span>
+              <span style="font-size: 0.8rem; color: #94a3b8;">${new Date().toLocaleTimeString()}</span>
+            </div>
+            <button class="btn btn-outline" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" onclick="openA2UIInspector()">
+              📦 View A2UI JSON
+            </button>
+          </div>
+          ${contentHtml}
+          ${sqlDrawerHtml}
+          ${suggestionsHtml}
+        </div>
+      `;
+
+      feed.appendChild(turnEl);
+
+      // If chart mode or dual mode, render A2UI components into this turn surface
+      if (isChart && data.a2ui_payload) {
+        renderA2UISurface(`a2ui-surface-turn-${turnId}`, data.a2ui_payload, turnId);
+      }
+
+      feed.scrollTop = feed.scrollHeight;
+    }
+
     async function submitCustomerAnalysisQuery() {
       const input = document.getElementById('nl-query-input');
       const btnSubmit = document.getElementById('btn-submit-nl-query');
@@ -2654,40 +2997,36 @@
         return;
       }
 
+      if (input) input.value = '';
       if (btnSubmit) btnSubmit.disabled = true;
       if (loading) loading.style.display = 'block';
+
+      // Append User message to conversation feed
+      appendCaUserTurn(question);
 
       try {
         const res = await fetch('/api/customer-analysis/query', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: question })
+          body: JSON.stringify({ question: question, history: caConversationHistory })
         });
         const data = await res.json();
 
-        // Update Dynamic Query SQL Metadata Panel
-        if (data.query_record) {
-          const qr = data.query_record;
-          const metaPanel = document.getElementById('nl-query-meta-panel');
-          if (metaPanel) metaPanel.style.display = 'block';
-          document.getElementById('nl-query-title').innerText = qr.title || 'Dynamic Query Execution';
-          document.getElementById('nl-query-stats').innerText = `Duration: ${qr.duration_ms}ms | AI: ${(qr.ai_functions || []).join(', ')} | Rows: ${qr.row_count}`;
-          document.getElementById('nl-query-sql-code').innerText = qr.sql || '-- BigQuery SQL';
-        }
+        // Update multi-turn history
+        caConversationHistory.push({ role: 'user', content: question });
+        const agentContent = data.verbal_response || data.answer_summary || '';
+        caConversationHistory.push({ role: 'agent', content: agentContent, response_type: data.response_type });
 
-        // Store A2UI Payload for Inspector
+        // Store A2UI Payload for Inspector modal
         currentA2UIPayload = data.a2ui_payload || [];
         const pre = document.getElementById('a2ui-raw-json');
         if (pre) pre.innerText = JSON.stringify(currentA2UIPayload, null, 2);
 
-        // Render Surface via A2UI 0.9.1 Protocol Client Engine
-        renderA2UISurface('a2ui-surface-container', currentA2UIPayload);
+        // Render Auditor Turn in Feed
+        renderAuditorTurn(data, question);
       } catch (err) {
         console.error('Error submitting customer analysis query:', err);
-        const container = document.getElementById('a2ui-surface-container');
-        if (container) {
-          container.innerHTML = `<div style="color: #f43f5e; padding: 1rem;">Error executing dynamic query: ${err.message}</div>`;
-        }
+        appendCaErrorTurn(err.message);
       } finally {
         if (btnSubmit) btnSubmit.disabled = false;
         if (loading) loading.style.display = 'none';
@@ -2697,7 +3036,7 @@
     // =====================================================================
     // A2UI 0.9.1 Protocol Client-Side Renderer
     // =====================================================================
-    function renderA2UISurface(containerId, payload) {
+    function renderA2UISurface(containerId, payload, turnId = '') {
       const container = document.getElementById(containerId);
       if (!container || !payload || !Array.isArray(payload)) return;
 
@@ -2711,30 +3050,31 @@
       const compMap = new Map();
       components.forEach(c => compMap.set(c.id, c));
 
-      if (currentA2UIChart) {
-        currentA2UIChart.destroy();
-        currentA2UIChart = null;
-      }
-
       container.innerHTML = '';
 
       const rootComp = components.find(c => c.type === 'a2ui.Card') || components[0];
       if (rootComp) {
-        const rootEl = renderA2UIComponent(rootComp, compMap);
+        const rootEl = renderA2UIComponent(rootComp, compMap, turnId);
         container.appendChild(rootEl);
       }
 
       // Initialize dynamic charts inside A2UI surface
       components.forEach(c => {
         if (c.type === 'a2ui.Chart' && c.props) {
-          const canvas = document.getElementById(`a2ui-canvas-${c.id}`);
+          const canvasId = turnId ? `a2ui-canvas-${c.id}-${turnId}` : `a2ui-canvas-${c.id}`;
+          const canvas = document.getElementById(canvasId);
           if (canvas) {
             const ctx = canvas.getContext('2d');
             const p = c.props;
             const isLine = p.chartType === 'line';
             const isDoughnut = p.chartType === 'doughnut';
 
-            currentA2UIChart = new Chart(ctx, {
+            // Clean up any existing chart instance on this canvas
+            if (a2uiChartInstances.has(canvasId)) {
+              a2uiChartInstances.get(canvasId).destroy();
+            }
+
+            const chartInstance = new Chart(ctx, {
               type: p.chartType || 'bar',
               data: {
                 labels: p.labels || [],
@@ -2789,12 +3129,15 @@
                 }
               }
             });
+
+            a2uiChartInstances.set(canvasId, chartInstance);
+            currentA2UIChart = chartInstance;
           }
         }
       });
     }
 
-    function renderA2UIComponent(comp, compMap) {
+    function renderA2UIComponent(comp, compMap, turnId = '') {
       const type = comp.type || '';
       const props = comp.props || {};
 
@@ -2802,7 +3145,7 @@
         case 'a2ui.Card': {
           const card = document.createElement('div');
           card.className = 'a2ui-card';
-          card.id = `a2ui-node-${comp.id}`;
+          card.id = turnId ? `a2ui-node-${comp.id}-${turnId}` : `a2ui-node-${comp.id}`;
           
           if (props.title) {
             const titleEl = document.createElement('div');
@@ -2823,7 +3166,7 @@
             comp.children.forEach(childId => {
               const child = compMap.get(childId);
               if (child) {
-                bodyEl.appendChild(renderA2UIComponent(child, compMap));
+                bodyEl.appendChild(renderA2UIComponent(child, compMap, turnId));
               }
             });
           }
@@ -2833,7 +3176,7 @@
 
         case 'a2ui.Text': {
           const p = document.createElement('p');
-          p.id = `a2ui-node-${comp.id}`;
+          p.id = turnId ? `a2ui-node-${comp.id}-${turnId}` : `a2ui-node-${comp.id}`;
           p.style.fontSize = props.variant === 'lead' ? '0.95rem' : '0.875rem';
           p.style.color = props.variant === 'lead' ? '#f1f5f9' : '#cbd5e1';
           p.style.lineHeight = '1.5';
@@ -2845,12 +3188,12 @@
         case 'a2ui.Row': {
           const row = document.createElement('div');
           row.className = 'a2ui-row';
-          row.id = `a2ui-node-${comp.id}`;
+          row.id = turnId ? `a2ui-node-${comp.id}-${turnId}` : `a2ui-node-${comp.id}`;
           if (comp.children && Array.isArray(comp.children)) {
             comp.children.forEach(childId => {
               const child = compMap.get(childId);
               if (child) {
-                row.appendChild(renderA2UIComponent(child, compMap));
+                row.appendChild(renderA2UIComponent(child, compMap, turnId));
               }
             });
           }
@@ -2860,7 +3203,7 @@
         case 'a2ui.Metric': {
           const metric = document.createElement('div');
           metric.className = 'a2ui-metric';
-          metric.id = `a2ui-node-${comp.id}`;
+          metric.id = turnId ? `a2ui-node-${comp.id}-${turnId}` : `a2ui-node-${comp.id}`;
           metric.innerHTML = `
             <div class="a2ui-metric-label">${props.label || ''}</div>
             <div class="a2ui-metric-value">${props.value || '-'}</div>
@@ -2872,7 +3215,7 @@
         case 'a2ui.Chart': {
           const chartBox = document.createElement('div');
           chartBox.className = 'card';
-          chartBox.id = `a2ui-node-${comp.id}`;
+          chartBox.id = turnId ? `a2ui-node-${comp.id}-${turnId}` : `a2ui-node-${comp.id}`;
           chartBox.style.marginBottom = '1rem';
           chartBox.style.background = 'rgba(15, 23, 42, 0.7)';
           
@@ -2892,7 +3235,7 @@
           container.style.height = props.chartType === 'doughnut' ? '220px' : '240px';
           
           const canvas = document.createElement('canvas');
-          canvas.id = `a2ui-canvas-${comp.id}`;
+          canvas.id = turnId ? `a2ui-canvas-${comp.id}-${turnId}` : `a2ui-canvas-${comp.id}`;
           container.appendChild(canvas);
           chartBox.appendChild(container);
           return chartBox;
