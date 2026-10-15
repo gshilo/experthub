@@ -916,6 +916,7 @@
                   <option value="human" selected>Realistic Human (~5–7s/turn)</option>
                   <option value="relaxed">Relaxed Human (~7–10s/turn)</option>
                   <option value="fast">Fast / Demo (~2s/turn)</option>
+                  <option value="turbo">⚡ Turbo (Instant / Machine speed)</option>
                 </select>
               </div>
             </div>
@@ -1469,6 +1470,7 @@
     }
 
     let activeSessionId = null;
+    let activeSessionPacing = 'human';
     let eventSource = null;
 
     // Start Live Conversation Simulation
@@ -1491,6 +1493,7 @@
       try {
         const pacingEl = document.getElementById('chat-pacing');
         const pacing = pacingEl ? pacingEl.value : 'human';
+        activeSessionPacing = pacing;
         const res = await fetch('/api/conversation/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1498,6 +1501,9 @@
         });
         const data = await res.json();
         activeSessionId = data.session_id;
+        if (data.pacing) {
+          activeSessionPacing = data.pacing;
+        }
 
         // Render persona
         document.getElementById('p-name').innerText = data.persona.customer_name;
@@ -1593,7 +1599,13 @@
         renderedEvents.add(eventKey);
 
         if (eventType === 'typing') {
-          showTypingIndicator(d.sender, d.name, d.status_text);
+          if (activeSessionPacing === 'turbo' || d.pacing === 'turbo') {
+            if (d.status_text) {
+              liveStatus.innerText = d.status_text;
+            }
+          } else {
+            showTypingIndicator(d.sender, d.name, d.status_text);
+          }
         } else if (eventType === 'customer_turn') {
           removeTypingIndicator();
           liveStatus.innerText = `${d.customer_name} sent message`;
