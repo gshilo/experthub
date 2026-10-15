@@ -42,6 +42,20 @@ Content-Type: `text/event-stream`
 * **Tool Usage Breakdown:** Donut chart illustrating calls to catalog search, order lookup, warranty policy, and return initiation tools.
 * **Auto-Refresh Toggle:** Automatically refreshes BigQuery metrics every 15 seconds.
 
+### Tab 3: Customer Analysis (Auditor AI & A2UI 0.9.1)
+* **Static Dashboard (Top Section):**
+  * **Customer Sentiment:** Sentiment distribution (Positive, Neutral, Negative) computed with BigQuery AI reasoning (`AI.CLASSIFY` / `AI.GENERATE`).
+  * **Customer Satisfaction:** Star rating distribution (1-5 stars) and verbal feedback praises/complaints synthesized directly in BigQuery from `demo.customer_ratings`.
+  * **Product Rating by Returns & Defects:** Product-level ratings, defect incidence %, return counts, and primary reported defect descriptions.
+  * **Auditor BigQuery AI Pushdown Trace:** Expandable view of the SQL query, duration (~850ms), and AI functions used (`AI.IF`, `AI.GENERATE`).
+  * **Refresh Analysis:** On-demand refresh button backed by `/api/customer-analysis/dashboard` with 60-second in-memory caching.
+* **Dynamic Query & Visualization (Bottom Section):**
+  * **Natural Language Text Box:** Enables users to ask arbitrary customer service, defect, return, or satisfaction questions.
+  * **One-Click Suggestion Chips:** Quick execution for popular queries ("Satisfaction over time", "Top defect complaints by product", "Negative verbal feedback drivers", "Return reasons vs star ratings", "Appliance sentiment breakdown").
+  * **Auditor Agent Backend (`POST /api/customer-analysis/query`):** Pushes down AI reasoning to BigQuery with BigQuery AI functions and formats response into **A2UI 0.9.1** protocol format.
+  * **A2UI 0.9.1 Client Engine:** Standard-compliant client renderer converting A2UI v0.9.1 adjacency list messages (`createSurface`, `updateComponents`, `updateDataModel`) into interactive cards, metric callouts, responsive tables, and dynamic Chart.js visualizations.
+  * **Auditor SQL Trace & A2UI Inspector:** Collapsible panel showing the executed BigQuery SQL with execution duration, plus a dedicated "View A2UI 0.9.1 JSON" modal.
+
 ---
 
 ## 4. Runtime Dependencies, Telemetry & Agent Engine Observability

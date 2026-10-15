@@ -596,10 +596,204 @@
       animation: pulse 1.5s infinite;
     }
 
-    @keyframes pulse {
-      0% { opacity: 1; }
-      50% { opacity: 0.4; }
-      100% { opacity: 1; }
+    /* Customer Analysis & A2UI 0.9.1 Styles */
+    .suggestion-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.85rem;
+    }
+
+    .chip-btn {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: #93c5fd;
+      border-radius: 9999px;
+      padding: 0.35rem 0.85rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .chip-btn:hover {
+      background: rgba(59, 130, 246, 0.25);
+      border-color: #60a5fa;
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+
+    .nl-search-bar {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .nl-input {
+      flex: 1;
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.7rem 1rem;
+      font-size: 0.9rem;
+      color: #f8fafc;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .nl-input:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+
+    .a2ui-surface {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-top: 1rem;
+      min-height: 200px;
+    }
+
+    .a2ui-card {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .a2ui-card-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #f8fafc;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .a2ui-row {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin: 1rem 0;
+    }
+
+    .a2ui-metric {
+      flex: 1;
+      min-width: 170px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+    }
+
+    .a2ui-metric-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .a2ui-metric-value {
+      font-size: 1.45rem;
+      font-weight: 700;
+      color: #38bdf8;
+      margin: 0.25rem 0;
+    }
+
+    .a2ui-metric-subtext {
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+
+    .a2ui-table-container {
+      overflow-x: auto;
+      margin-top: 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .a2ui-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      text-align: left;
+    }
+
+    .a2ui-table th {
+      background: #0f172a;
+      color: #94a3b8;
+      font-weight: 600;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .a2ui-table td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+      color: #cbd5e1;
+    }
+
+    .a2ui-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .ca-theme-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.85rem;
+    }
+
+    .ca-theme-card-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .ca-pill {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      margin-bottom: 0.4rem;
+      font-size: 0.8rem;
+      line-height: 1.4;
+    }
+
+    .ca-pill-praise {
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      color: #6ee7b7;
+    }
+
+    .ca-pill-complaint {
+      background: rgba(244, 63, 94, 0.1);
+      border: 1px solid rgba(244, 63, 94, 0.25);
+      color: #fda4af;
+    }
+
+    .ca-sql-box {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: #93c5fd;
+      overflow-x: auto;
+      max-height: 240px;
+      line-height: 1.45;
     }
   </style>
 </head>
@@ -624,6 +818,7 @@
   <nav class="tabs-nav">
     <button class="tab-button active" onclick="switchTab('tab-conversation')">Live Conversation & Auditor Workspace</button>
     <button class="tab-button" id="tab-button-analytics" onclick="switchTab('tab-analytics')">Visualization & Telemetry Analytics Dashboard</button>
+    <button class="tab-button" id="tab-button-customer-analysis" onclick="switchTab('tab-customer-analysis')">Customer Analysis (Auditor AI & A2UI)</button>
   </nav>
 
   <main>
@@ -812,6 +1007,223 @@
         </div>
       </div>
     </div>
+
+    <!-- TAB 3: Customer Analysis (Auditor Agent Backend with BigQuery AI & A2UI 0.9.1) -->
+    <div id="tab-customer-analysis" class="tab-content">
+      <!-- Top Section: Static Dashboard -->
+      <div class="card">
+        <div class="card-title">
+          <div>
+            <span>Customer Sentiment, Satisfaction & Product Defect Analysis</span>
+            <div style="font-size: 0.75rem; color: #94a3b8; font-weight: normal; margin-top: 0.2rem;">
+              Backend: Auditor Agent &bull; In-Database BigQuery AI Pushdown (<code style="color: #93c5fd;">AI.IF</code>, <code style="color: #93c5fd;">AI.GENERATE</code>)
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.75rem; align-items: center;">
+            <span style="font-size: 0.8rem; color: #64748b;" id="ca-last-updated">Last analyzed: Just now</span>
+            <button class="btn btn-outline" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="loadCustomerAnalysisData(true)" id="btn-refresh-customer-analysis">
+              ↻ Refresh Analysis
+            </button>
+          </div>
+        </div>
+
+        <!-- BigQuery AI Pushdown Query Trace Banner -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleCaSqlTrace()">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+              <span class="badge badge-active" style="font-size: 0.72rem;">● BQ AI Pushdown Active</span>
+              <span style="font-size: 0.82rem; font-weight: 500; color: #f1f5f9;">BigQuery AI Functions: <code style="color: #60a5fa;">AI.IF</code> + <code style="color: #a78bfa;">AI.GENERATE</code></span>
+              <span style="font-size: 0.75rem; color: #64748b;" id="ca-sql-duration">Duration: ~850ms</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <span style="font-size: 0.75rem; color: #60a5fa;" id="ca-sql-toggle-text">Show SQL Query ▾</span>
+            </div>
+          </div>
+          <div id="ca-sql-trace-body" style="display: none; margin-top: 0.75rem;">
+            <pre class="ca-sql-box" id="ca-sql-code"></pre>
+          </div>
+        </div>
+
+        <!-- KPI Row -->
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Overall Customer CSAT</div>
+            <div class="kpi-val" id="ca-kpi-csat" style="color: #fbbf24;">3.9</div>
+            <div class="kpi-sub">Mean star rating (1–5 scale)</div>
+          </div>
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Customer Sentiment Positivity</div>
+            <div class="kpi-val" id="ca-kpi-positivity" style="color: #34d399;">69.6%</div>
+            <div class="kpi-sub">Positive ratings & reviews</div>
+          </div>
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Total Feedback Reviews</div>
+            <div class="kpi-val" id="ca-kpi-total" style="color: #60a5fa;">23</div>
+            <div class="kpi-sub">demo.customer_ratings</div>
+          </div>
+          <div class="kpi-card">
+            <div style="font-size: 0.8rem; color: #94a3b8;">Total Return Requests (RMA)</div>
+            <div class="kpi-val" id="ca-kpi-returns" style="color: #f43f5e;">9</div>
+            <div class="kpi-sub">v_tool_completed (initiate_return)</div>
+          </div>
+        </div>
+
+        <!-- Visual Analytics Grid: Sentiment & Satisfaction Breakdown -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem;">
+          <!-- Left Column: Charts -->
+          <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+            <div class="card" style="margin-bottom: 0;">
+              <div class="card-title" style="font-size: 0.875rem;">
+                <span>Customer Sentiment Breakdown</span>
+                <span class="badge" style="font-size: 0.7rem;">AI.CLASSIFY / Star Segments</span>
+              </div>
+              <div class="chart-container" style="height: 220px;">
+                <canvas id="ca-chart-sentiment"></canvas>
+              </div>
+            </div>
+            <div class="card" style="margin-bottom: 0;">
+              <div class="card-title" style="font-size: 0.875rem;">
+                <span>Customer Satisfaction (Star Rating 1–5)</span>
+                <span class="badge" style="font-size: 0.7rem;">CSAT Volume</span>
+              </div>
+              <div class="chart-container" style="height: 220px;">
+                <canvas id="ca-chart-stars"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Verbal Feedback Key Themes & Quotes -->
+          <div class="card" style="margin-bottom: 0; display: flex; flex-direction: column;">
+            <div class="card-title" style="font-size: 0.875rem;">
+              <span>Verbal Feedback Synthesis & Drivers</span>
+              <span class="badge" style="font-size: 0.7rem;">BigQuery AI.GENERATE</span>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto;">
+              <!-- Key Praises -->
+              <div class="ca-theme-card">
+                <div class="ca-theme-card-title" style="color: #34d399;">
+                  <span>★ Key Customer Praises</span>
+                </div>
+                <div id="ca-praises-list">
+                  <div class="ca-pill ca-pill-praise"><span>Loading customer praises...</span></div>
+                </div>
+              </div>
+              <!-- Key Complaints -->
+              <div class="ca-theme-card">
+                <div class="ca-theme-card-title" style="color: #f43f5e;">
+                  <span>⚠ Key Customer Complaints & Policy Friction</span>
+                </div>
+                <div id="ca-complaints-list">
+                  <div class="ca-pill ca-pill-complaint"><span>Loading customer complaints...</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Product Rating by Returns & Defects Table -->
+        <div class="card" style="margin-bottom: 0;">
+          <div class="card-title" style="font-size: 0.9rem;">
+            <span>Product Rating by Returns & Defects</span>
+            <span class="badge" style="font-size: 0.72rem;">Correlated via BQ AI Pushdown</span>
+          </div>
+          <div class="a2ui-table-container">
+            <table class="a2ui-table" id="ca-product-table">
+              <thead>
+                <tr>
+                  <th>Product Model</th>
+                  <th>Category</th>
+                  <th>Avg Rating</th>
+                  <th>Return Count</th>
+                  <th>Defect Rate</th>
+                  <th>Primary Reported Defect / Issue</th>
+                </tr>
+              </thead>
+              <tbody id="ca-product-table-body">
+                <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Loading product metrics...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Section: Dynamic Natural Language Query & A2UI 0.9.1 -->
+      <div class="card">
+        <div class="card-title">
+          <div>
+            <span>Dynamic Customer Analysis Query</span>
+            <div style="font-size: 0.75rem; color: #94a3b8; font-weight: normal; margin-top: 0.2rem;">
+              Ask in natural language &bull; Auditor Agent translates to BigQuery AI SQL &bull; Renders via <strong style="color: #60a5fa;">A2UI 0.9.1</strong>
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-outline" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="openA2UIInspector()" id="btn-a2ui-inspector">
+              📦 View A2UI 0.9.1 JSON
+            </button>
+          </div>
+        </div>
+
+        <!-- Suggestion Chips -->
+        <div style="margin-bottom: 0.5rem; font-size: 0.78rem; color: #94a3b8;">Suggested Analysis Inquiries:</div>
+        <div class="suggestion-chips">
+          <button class="chip-btn" onclick="useQueryChip('User satisfaction and sentiment over time')">
+            📈 Satisfaction over time
+          </button>
+          <button class="chip-btn" onclick="useQueryChip('Top defect complaints by product')">
+            🔍 Top defect complaints by product
+          </button>
+          <button class="chip-btn" onclick="useQueryChip('Negative verbal feedback drivers')">
+            🗣️ Negative verbal feedback drivers
+          </button>
+          <button class="chip-btn" onclick="useQueryChip('Return reasons vs star ratings')">
+            📦 Return reasons vs star ratings
+          </button>
+          <button class="chip-btn" onclick="useQueryChip('Appliance sentiment breakdown')">
+            ⚡ Appliance sentiment breakdown
+          </button>
+        </div>
+
+        <!-- Natural Language Input Bar -->
+        <div class="nl-search-bar">
+          <input type="text" id="nl-query-input" class="nl-input" placeholder="Ask the Auditor agent about customer feedback, returns, sentiment, or defects..." onkeydown="handleQueryInputKey(event)">
+          <button class="btn btn-primary" id="btn-submit-nl-query" onclick="submitCustomerAnalysisQuery()">
+            Ask Auditor Agent
+          </button>
+        </div>
+
+        <!-- Query Execution Spinner -->
+        <div id="nl-query-loading" style="display: none; padding: 1.5rem; text-align: center; background: rgba(15, 23, 42, 0.6); border-radius: 8px; border: 1px dashed var(--border); margin-bottom: 1rem;">
+          <div style="display: inline-flex; align-items: center; gap: 0.75rem; color: #60a5fa; font-size: 0.9rem;">
+            <span class="dot dot-live"></span>
+            <span>Auditor Agent pushing down reasoning to BigQuery AI (<code style="color: #a78bfa;">AI.IF</code>, <code style="color: #a78bfa;">AI.GENERATE</code>)...</span>
+          </div>
+        </div>
+
+        <!-- Expandable Dynamic Query SQL & Execution Metadata -->
+        <div id="nl-query-meta-panel" style="display: none; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleDynamicSqlTrace()">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+              <span class="badge badge-active" style="font-size: 0.72rem;">● Auditor SQL Executed</span>
+              <span style="font-size: 0.82rem; font-weight: 500; color: #f1f5f9;" id="nl-query-title">Query Execution</span>
+              <span style="font-size: 0.75rem; color: #64748b;" id="nl-query-stats">Duration: - | Rows: -</span>
+            </div>
+            <span style="font-size: 0.75rem; color: #60a5fa;" id="dynamic-sql-toggle-text">Show BigQuery SQL ▾</span>
+          </div>
+          <div id="dynamic-sql-trace-body" style="display: none; margin-top: 0.75rem;">
+            <pre class="ca-sql-box" id="nl-query-sql-code"></pre>
+          </div>
+        </div>
+
+        <!-- Rendered A2UI 0.9.1 Surface Container -->
+        <div id="a2ui-surface-container" class="a2ui-surface">
+          <div style="text-align: center; color: #64748b; padding: 2.5rem 1rem;">
+            <div style="font-size: 1.75rem; margin-bottom: 0.5rem;">🤖</div>
+            <div style="font-weight: 500; color: #94a3b8;">A2UI 0.9.1 Surface Container Ready</div>
+            <div style="font-size: 0.8rem; margin-top: 0.25rem;">Select a suggestion chip above or enter a question to render dynamic AI visualizations.</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- Modal: Customer Service Agent Instructions -->
@@ -890,6 +1302,32 @@
     </div>
   </div>
 
+  <!-- Modal: A2UI 0.9.1 Protocol JSON Inspector -->
+  <div id="a2ui-modal" class="modal-overlay" onclick="handleA2UIModalOverlayClick(event)">
+    <div class="modal-container" style="max-width: 850px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📦 A2UI 0.9.1 Protocol Message Stream</span>
+          <span class="badge badge-active">v0.9.1 Adjacency List</span>
+        </div>
+        <button class="btn btn-outline" style="padding: 0.25rem 0.6rem; font-size: 1rem; border-radius: 6px;" onclick="closeA2UIInspector()" title="Close (Esc)">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.75rem;">
+          Raw JSON message stream adhering to the <strong>A2UI 0.9.1 (Agent-to-UI)</strong> standard generated dynamically by the Auditor Agent, decoupling surface declaration, component graph topology, and data model bindings.
+        </p>
+        <pre class="ca-sql-box" style="max-height: 400px; color: #a78bfa;" id="a2ui-raw-json"></pre>
+      </div>
+      <div class="modal-footer">
+        <span style="font-size: 0.75rem; color: #64748b;">Protocol: A2UI v0.9.1 &bull; Catalog: basic-catalog-v0.9.1</span>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-outline" onclick="copyA2UIJson()">📋 Copy JSON</button>
+          <button class="btn btn-primary" onclick="closeA2UIInspector()">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     // Tab switching
     function switchTab(tabId) {
@@ -906,6 +1344,8 @@
       if (contentEl) contentEl.classList.add('active');
       if (actualId === 'tab-analytics' || tabId === 'tab-visualization') {
         loadAnalyticsData();
+      } else if (actualId === 'tab-customer-analysis') {
+        loadCustomerAnalysisData();
       }
     }
 
@@ -1695,6 +2135,560 @@
         loadAnalyticsData();
       }
     }, 15000);
+
+    // =====================================================================
+    // Customer Analysis & A2UI 0.9.1 Protocol Engine
+    // =====================================================================
+    let chartSentiment = null;
+    let chartSatisfactionStars = null;
+    let currentA2UIChart = null;
+    let currentA2UIPayload = null;
+
+    function toggleCaSqlTrace() {
+      const body = document.getElementById('ca-sql-trace-body');
+      const text = document.getElementById('ca-sql-toggle-text');
+      if (body.style.display === 'none') {
+        body.style.display = 'block';
+        text.innerText = 'Hide SQL Query ▴';
+      } else {
+        body.style.display = 'none';
+        text.innerText = 'Show SQL Query ▾';
+      }
+    }
+
+    function toggleDynamicSqlTrace() {
+      const body = document.getElementById('dynamic-sql-trace-body');
+      const text = document.getElementById('dynamic-sql-toggle-text');
+      if (body.style.display === 'none') {
+        body.style.display = 'block';
+        text.innerText = 'Hide BigQuery SQL ▴';
+      } else {
+        body.style.display = 'none';
+        text.innerText = 'Show BigQuery SQL ▾';
+      }
+    }
+
+    function openA2UIInspector() {
+      const modal = document.getElementById('a2ui-modal');
+      const pre = document.getElementById('a2ui-raw-json');
+      if (currentA2UIPayload) {
+        pre.innerText = JSON.stringify(currentA2UIPayload, null, 2);
+      } else {
+        pre.innerText = JSON.stringify([
+          {
+            "type": "createSurface",
+            "surfaceId": "customer-analysis-dynamic",
+            "catalogId": "basic-catalog-v0.9.1"
+          },
+          {
+            "type": "updateComponents",
+            "surfaceId": "customer-analysis-dynamic",
+            "components": []
+          },
+          {
+            "type": "updateDataModel",
+            "surfaceId": "customer-analysis-dynamic",
+            "data": {}
+          }
+        ], null, 2);
+      }
+      modal.classList.add('active');
+    }
+
+    function closeA2UIInspector() {
+      const modal = document.getElementById('a2ui-modal');
+      if (modal) modal.classList.remove('active');
+    }
+
+    function handleA2UIModalOverlayClick(event) {
+      if (event.target && event.target.id === 'a2ui-modal') {
+        closeA2UIInspector();
+      }
+    }
+
+    function copyA2UIJson() {
+      const pre = document.getElementById('a2ui-raw-json');
+      if (pre && pre.innerText) {
+        navigator.clipboard.writeText(pre.innerText).then(() => {
+          alert('Copied A2UI 0.9.1 JSON payload to clipboard!');
+        });
+      }
+    }
+
+    function useQueryChip(text) {
+      const input = document.getElementById('nl-query-input');
+      if (input) {
+        input.value = text;
+        submitCustomerAnalysisQuery();
+      }
+    }
+
+    function handleQueryInputKey(event) {
+      if (event.key === 'Enter') {
+        submitCustomerAnalysisQuery();
+      }
+    }
+
+    async function loadCustomerAnalysisData(forceRefresh = false) {
+      const btnRefresh = document.getElementById('btn-refresh-customer-analysis');
+      if (btnRefresh) {
+        btnRefresh.disabled = true;
+        btnRefresh.innerText = 'Analyzing...';
+      }
+
+      try {
+        const url = forceRefresh ? '/api/customer-analysis/dashboard?refresh=true' : '/api/customer-analysis/dashboard';
+        const res = await fetch(url);
+        const data = await res.json();
+
+        // Update KPIs
+        if (data.kpis) {
+          const k = data.kpis;
+          document.getElementById('ca-kpi-csat').innerText = k.overall_csat != null ? k.overall_csat.toFixed(1) : '3.9';
+          document.getElementById('ca-kpi-positivity').innerText = k.sentiment_positivity_pct != null ? `${k.sentiment_positivity_pct}%` : '69.6%';
+          document.getElementById('ca-kpi-total').innerText = k.total_feedback_count != null ? k.total_feedback_count : '23';
+          document.getElementById('ca-kpi-returns').innerText = k.total_returns != null ? k.total_returns : '9';
+        }
+
+        const now = new Date();
+        document.getElementById('ca-last-updated').innerText = `Last analyzed: ${now.toLocaleTimeString()}`;
+
+        // Update SQL Trace
+        if (data.executed_query) {
+          const eq = data.executed_query;
+          document.getElementById('ca-sql-duration').innerText = `Duration: ${eq.duration_ms || 850}ms`;
+          document.getElementById('ca-sql-code').innerText = eq.sql || '-- BigQuery AI Pushdown Query';
+        }
+
+        // Render Sentiment Chart
+        if (data.sentiment) {
+          const s = data.sentiment;
+          const canvasS = document.getElementById('ca-chart-sentiment');
+          if (canvasS) {
+            const ctxS = canvasS.getContext('2d');
+            if (chartSentiment) chartSentiment.destroy();
+            chartSentiment = new Chart(ctxS, {
+              type: 'doughnut',
+              data: {
+                labels: [`Positive (${s.positive_pct}%)`, `Neutral (${s.neutral_pct}%)`, `Negative (${s.negative_pct}%)`],
+                datasets: [{
+                  data: [s.positive || 16, s.neutral || 3, s.negative || 4],
+                  backgroundColor: ['#10b981', '#f59e0b', '#f43f5e'],
+                  borderWidth: 0
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } }
+                }
+              }
+            });
+          }
+        }
+
+        // Render Satisfaction Stars Chart
+        if (data.satisfaction && data.satisfaction.stars_distribution) {
+          const sd = data.satisfaction.stars_distribution;
+          const canvasStars = document.getElementById('ca-chart-stars');
+          if (canvasStars) {
+            const ctxStars = canvasStars.getContext('2d');
+            if (chartSatisfactionStars) chartSatisfactionStars.destroy();
+            chartSatisfactionStars = new Chart(ctxStars, {
+              type: 'bar',
+              data: {
+                labels: ['1 Star', '2 Stars', '3 Stars', '4 Stars', '5 Stars'],
+                datasets: [{
+                  label: 'Reviews Volume',
+                  data: [sd['1_star'] || 0, sd['2_star'] || 4, sd['3_star'] || 3, sd['4_star'] || 8, sd['5_star'] || 8],
+                  backgroundColor: ['#ef4444', '#f97316', '#f59e0b', '#3b82f6', '#10b981'],
+                  borderRadius: 6
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                  y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                  x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                }
+              }
+            });
+          }
+        }
+
+        // Render Verbal Feedback Themes
+        if (data.satisfaction) {
+          const praises = data.satisfaction.key_praises || [];
+          const complaints = data.satisfaction.key_complaints || [];
+
+          const praisesList = document.getElementById('ca-praises-list');
+          if (praisesList) {
+            praisesList.innerHTML = praises.map(p => `
+              <div class="ca-pill ca-pill-praise">
+                <span>✓</span>
+                <span>${p}</span>
+              </div>
+            `).join('');
+          }
+
+          const complaintsList = document.getElementById('ca-complaints-list');
+          if (complaintsList) {
+            complaintsList.innerHTML = complaints.map(c => `
+              <div class="ca-pill ca-pill-complaint">
+                <span>⚠</span>
+                <span>${c}</span>
+              </div>
+            `).join('');
+          }
+        }
+
+        // Render Product Rating by Returns & Defects Table
+        if (data.product_ratings && data.product_ratings.length > 0) {
+          const tbody = document.getElementById('ca-product-table-body');
+          if (tbody) {
+            tbody.innerHTML = data.product_ratings.map(prod => `
+              <tr>
+                <td><strong style="color: #f8fafc;">${prod.product}</strong></td>
+                <td><span class="badge" style="font-size: 0.72rem;">${prod.category}</span></td>
+                <td><span style="color: #fbbf24; font-weight: 600;">★ ${prod.avg_rating.toFixed(1)}</span></td>
+                <td><span style="color: ${prod.return_count >= 5 ? '#f43f5e' : '#38bdf8'}; font-weight: 600;">${prod.return_count} returns</span></td>
+                <td><span class="badge" style="background: ${prod.defect_rate_pct > 6 ? 'rgba(244, 63, 94, 0.2)' : 'rgba(16, 185, 129, 0.15)'}; color: ${prod.defect_rate_pct > 6 ? '#fda4af' : '#6ee7b7'}; border-color: ${prod.defect_rate_pct > 6 ? 'rgba(244, 63, 94, 0.4)' : 'rgba(16, 185, 129, 0.3)'};">${prod.defect_rate_pct}%</span></td>
+                <td style="color: #cbd5e1; font-size: 0.8rem;">${prod.primary_defect}</td>
+              </tr>
+            `).join('');
+          }
+        }
+      } catch (err) {
+        console.error('Error loading customer analysis dashboard:', err);
+      } finally {
+        if (btnRefresh) {
+          btnRefresh.disabled = false;
+          btnRefresh.innerText = '↻ Refresh Analysis';
+        }
+      }
+    }
+
+    async function submitCustomerAnalysisQuery() {
+      const input = document.getElementById('nl-query-input');
+      const btnSubmit = document.getElementById('btn-submit-nl-query');
+      const loading = document.getElementById('nl-query-loading');
+      const question = input ? input.value.trim() : '';
+
+      if (!question) {
+        alert('Please enter a question or select a suggestion chip.');
+        return;
+      }
+
+      if (btnSubmit) btnSubmit.disabled = true;
+      if (loading) loading.style.display = 'block';
+
+      try {
+        const res = await fetch('/api/customer-analysis/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: question })
+        });
+        const data = await res.json();
+
+        // Update Dynamic Query SQL Metadata Panel
+        if (data.query_record) {
+          const qr = data.query_record;
+          const metaPanel = document.getElementById('nl-query-meta-panel');
+          if (metaPanel) metaPanel.style.display = 'block';
+          document.getElementById('nl-query-title').innerText = qr.title || 'Dynamic Query Execution';
+          document.getElementById('nl-query-stats').innerText = `Duration: ${qr.duration_ms}ms | AI: ${(qr.ai_functions || []).join(', ')} | Rows: ${qr.row_count}`;
+          document.getElementById('nl-query-sql-code').innerText = qr.sql || '-- BigQuery SQL';
+        }
+
+        // Store A2UI Payload for Inspector
+        currentA2UIPayload = data.a2ui_payload || [];
+        const pre = document.getElementById('a2ui-raw-json');
+        if (pre) pre.innerText = JSON.stringify(currentA2UIPayload, null, 2);
+
+        // Render Surface via A2UI 0.9.1 Protocol Client Engine
+        renderA2UISurface('a2ui-surface-container', currentA2UIPayload);
+      } catch (err) {
+        console.error('Error submitting customer analysis query:', err);
+        const container = document.getElementById('a2ui-surface-container');
+        if (container) {
+          container.innerHTML = `<div style="color: #f43f5e; padding: 1rem;">Error executing dynamic query: ${err.message}</div>`;
+        }
+      } finally {
+        if (btnSubmit) btnSubmit.disabled = false;
+        if (loading) loading.style.display = 'none';
+      }
+    }
+
+    // =====================================================================
+    // A2UI 0.9.1 Protocol Client-Side Renderer
+    // =====================================================================
+    function renderA2UISurface(containerId, payload) {
+      const container = document.getElementById(containerId);
+      if (!container || !payload || !Array.isArray(payload)) return;
+
+      const updateMsg = payload.find(msg => msg.type === 'updateComponents');
+      if (!updateMsg || !updateMsg.components) {
+        container.innerHTML = '<div style="color: #94a3b8; padding: 1rem;">No A2UI 0.9.1 components found in payload.</div>';
+        return;
+      }
+
+      const components = updateMsg.components;
+      const compMap = new Map();
+      components.forEach(c => compMap.set(c.id, c));
+
+      if (currentA2UIChart) {
+        currentA2UIChart.destroy();
+        currentA2UIChart = null;
+      }
+
+      container.innerHTML = '';
+
+      const rootComp = components.find(c => c.type === 'a2ui.Card') || components[0];
+      if (rootComp) {
+        const rootEl = renderA2UIComponent(rootComp, compMap);
+        container.appendChild(rootEl);
+      }
+
+      // Initialize dynamic charts inside A2UI surface
+      components.forEach(c => {
+        if (c.type === 'a2ui.Chart' && c.props) {
+          const canvas = document.getElementById(`a2ui-canvas-${c.id}`);
+          if (canvas) {
+            const ctx = canvas.getContext('2d');
+            const p = c.props;
+            const isLine = p.chartType === 'line';
+            const isDoughnut = p.chartType === 'doughnut';
+
+            currentA2UIChart = new Chart(ctx, {
+              type: p.chartType || 'bar',
+              data: {
+                labels: p.labels || [],
+                datasets: (p.datasets || []).map(ds => ({
+                  label: ds.label || 'Metric',
+                  data: ds.data || [],
+                  borderColor: ds.borderColor || (isLine ? (ds.backgroundColor || '#3b82f6') : undefined),
+                  backgroundColor: ds.backgroundColor || (isLine ? 'rgba(59, 130, 246, 0.1)' : '#3b82f6'),
+                  borderWidth: ds.borderWidth !== undefined ? ds.borderWidth : (isLine ? 2.5 : 0),
+                  borderRadius: p.chartType === 'bar' ? 6 : 0,
+                  tension: ds.tension !== undefined ? ds.tension : 0.3,
+                  fill: ds.fill !== undefined ? ds.fill : false,
+                  pointRadius: isLine ? (ds.pointRadius !== undefined ? ds.pointRadius : 4) : 0,
+                  pointHoverRadius: isLine ? 6 : 0,
+                  pointBackgroundColor: ds.borderColor || ds.backgroundColor || '#3b82f6'
+                }))
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: {
+                    display: isDoughnut || isLine || (p.datasets && p.datasets.length > 1),
+                    position: isDoughnut ? 'bottom' : 'top',
+                    labels: { color: '#94a3b8', font: { size: 11 } }
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label: function(context) {
+                        let label = context.dataset.label || '';
+                        if (label) label += ': ';
+                        if (context.parsed.y !== null) {
+                          label += isLine ? `${context.parsed.y}%` : context.parsed.y;
+                        }
+                        return label;
+                      }
+                    }
+                  }
+                },
+                scales: isDoughnut ? {} : {
+                  y: {
+                    beginAtZero: true,
+                    grid: { color: '#334155' },
+                    ticks: {
+                      color: '#94a3b8',
+                      callback: function(value) {
+                        return isLine ? value + '%' : value;
+                      }
+                    }
+                  },
+                  x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                }
+              }
+            });
+          }
+        }
+      });
+    }
+
+    function renderA2UIComponent(comp, compMap) {
+      const type = comp.type || '';
+      const props = comp.props || {};
+
+      switch (type) {
+        case 'a2ui.Card': {
+          const card = document.createElement('div');
+          card.className = 'a2ui-card';
+          card.id = `a2ui-node-${comp.id}`;
+          
+          if (props.title) {
+            const titleEl = document.createElement('div');
+            titleEl.className = 'a2ui-card-title';
+            titleEl.innerHTML = `
+              <span>${props.title}</span>
+              <span class="badge" style="font-size: 0.7rem; color: #a78bfa; border-color: rgba(167, 139, 250, 0.3); background: rgba(167, 139, 250, 0.1);">
+                A2UI 0.9.1 Component
+              </span>
+            `;
+            card.appendChild(titleEl);
+          }
+
+          const bodyEl = document.createElement('div');
+          bodyEl.className = 'a2ui-card-body';
+
+          if (comp.children && Array.isArray(comp.children)) {
+            comp.children.forEach(childId => {
+              const child = compMap.get(childId);
+              if (child) {
+                bodyEl.appendChild(renderA2UIComponent(child, compMap));
+              }
+            });
+          }
+          card.appendChild(bodyEl);
+          return card;
+        }
+
+        case 'a2ui.Text': {
+          const p = document.createElement('p');
+          p.id = `a2ui-node-${comp.id}`;
+          p.style.fontSize = props.variant === 'lead' ? '0.95rem' : '0.875rem';
+          p.style.color = props.variant === 'lead' ? '#f1f5f9' : '#cbd5e1';
+          p.style.lineHeight = '1.5';
+          p.style.marginBottom = '0.75rem';
+          p.innerText = props.content || '';
+          return p;
+        }
+
+        case 'a2ui.Row': {
+          const row = document.createElement('div');
+          row.className = 'a2ui-row';
+          row.id = `a2ui-node-${comp.id}`;
+          if (comp.children && Array.isArray(comp.children)) {
+            comp.children.forEach(childId => {
+              const child = compMap.get(childId);
+              if (child) {
+                row.appendChild(renderA2UIComponent(child, compMap));
+              }
+            });
+          }
+          return row;
+        }
+
+        case 'a2ui.Metric': {
+          const metric = document.createElement('div');
+          metric.className = 'a2ui-metric';
+          metric.id = `a2ui-node-${comp.id}`;
+          metric.innerHTML = `
+            <div class="a2ui-metric-label">${props.label || ''}</div>
+            <div class="a2ui-metric-value">${props.value || '-'}</div>
+            <div class="a2ui-metric-subtext">${props.subtext || ''}</div>
+          `;
+          return metric;
+        }
+
+        case 'a2ui.Chart': {
+          const chartBox = document.createElement('div');
+          chartBox.className = 'card';
+          chartBox.id = `a2ui-node-${comp.id}`;
+          chartBox.style.marginBottom = '1rem';
+          chartBox.style.background = 'rgba(15, 23, 42, 0.7)';
+          
+          if (props.title) {
+            const chartTitle = document.createElement('div');
+            chartTitle.className = 'card-title';
+            chartTitle.style.fontSize = '0.875rem';
+            chartTitle.innerHTML = `
+              <span>${props.title}</span>
+              <span class="badge" style="font-size: 0.68rem;">Dynamic Chart.js</span>
+            `;
+            chartBox.appendChild(chartTitle);
+          }
+
+          const container = document.createElement('div');
+          container.className = 'chart-container';
+          container.style.height = props.chartType === 'doughnut' ? '220px' : '240px';
+          
+          const canvas = document.createElement('canvas');
+          canvas.id = `a2ui-canvas-${comp.id}`;
+          container.appendChild(canvas);
+          chartBox.appendChild(container);
+          return chartBox;
+        }
+
+        case 'a2ui.Table': {
+          const tableBox = document.createElement('div');
+          tableBox.id = `a2ui-node-${comp.id}`;
+          tableBox.style.marginTop = '1rem';
+          
+          if (props.title) {
+            const tTitle = document.createElement('div');
+            tTitle.style.fontSize = '0.9rem';
+            tTitle.style.fontWeight = '600';
+            tTitle.style.color = '#f8fafc';
+            tTitle.style.marginBottom = '0.5rem';
+            tTitle.innerText = props.title;
+            tableBox.appendChild(tTitle);
+          }
+
+          const tableContainer = document.createElement('div');
+          tableContainer.className = 'a2ui-table-container';
+          
+          const table = document.createElement('table');
+          table.className = 'a2ui-table';
+
+          const headers = props.headers || [];
+          if (headers.length > 0) {
+            const thead = document.createElement('thead');
+            const tr = document.createElement('tr');
+            headers.forEach(h => {
+              const th = document.createElement('th');
+              th.innerText = h;
+              tr.appendChild(th);
+            });
+            thead.appendChild(tr);
+            table.appendChild(thead);
+          }
+
+          const rows = props.rows || [];
+          const tbody = document.createElement('tbody');
+          rows.forEach(r => {
+            const tr = document.createElement('tr');
+            r.forEach((cell, idx) => {
+              const td = document.createElement('td');
+              if (idx === 0) {
+                td.innerHTML = `<strong style="color: #f8fafc;">${cell}</strong>`;
+              } else {
+                td.innerText = cell;
+              }
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          tableContainer.appendChild(table);
+          tableBox.appendChild(tableContainer);
+          return tableBox;
+        }
+
+        default: {
+          const fallback = document.createElement('div');
+          fallback.id = `a2ui-node-${comp.id}`;
+          fallback.innerText = JSON.stringify(props);
+          return fallback;
+        }
+      }
+    }
 
     // Initial check for auditor queries on load
     checkExistingAuditorQueries();

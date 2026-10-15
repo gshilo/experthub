@@ -290,3 +290,31 @@ Upon completion, Terraform exposes:
 * `secret_manager_github_pat`: `projects/537563976049/secrets/github-pat`
 * `vertex_ai_agent_ids`: Configured Reasoning Engine IDs for all three agents
 
+---
+
+## 8. Reset Demo State (Run Fresh Demo)
+
+To reset the demo environment to a clean slate:
+```bash
+# Preview what will be reset (both BigQuery and Git by default)
+python3 reset_demo_state.py --dry-run
+
+# Run full reset with interactive confirmation prompt
+python3 reset_demo_state.py
+
+# Run full reset automatically without confirmation
+python3 reset_demo_state.py -y
+
+# Reset ONLY BigQuery tables
+python3 reset_demo_state.py --bq-only -y
+
+# Reset ONLY Git context repository
+python3 reset_demo_state.py --git-only -y
+```
+
+This utility supports:
+1. **BigQuery Truncation (`--bq-only` or default):** Truncates BigQuery tables `demo.customer_ratings` and `agent_telemetry.agent_events` (preserving schema, clustering, and partitioning).
+2. **Git Context Reset (`--git-only` or default):** Clones `https://github.com/gshilo/experthub_context.git` using Secret Manager deploy key `github-deploy-key`, deletes all files from branch `new_version`, merges `new_version` into `main`, and pushes both branches to `origin`.
+
+
+
