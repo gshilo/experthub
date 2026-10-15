@@ -118,7 +118,7 @@ Generate the following exact folder hierarchy and files:
    * Dialogue turns are synthesized dynamically by `gemini-3.8-flash` via `generate_customer_turn(persona, history, service_reply)`, producing authentic, non-scripted customer responses tailored to the specific agent's suggestions, troubleshooting steps, and policy citations.
    * Simulated customers demonstrate genuine human resistance: questioning restocking fees, pushing back on tedious diagnostic steps, demanding carrier trace updates, and negotiating fair compromises.
    * Conversations execute across **6 to 8 back-and-forth interaction turns**, modeling authentic multi-step customer support dialogues.
-   * Inserts authentic human pacing delays (~5–7 seconds per turn, with animated typing indicators and live status tracking) so live UI streaming reads naturally like a genuine human chat. Users can also select Relaxed (~7–10s) or Fast (~2s) demo modes.
+   * Inserts authentic human pacing delays (~5–7 seconds per turn, with animated typing indicators and live status tracking) so live UI streaming reads naturally like a genuine human chat. Users can also select Relaxed (~7–10s), Fast (~2s), or Turbo (Instant / Machine speed) demo modes.
    * Continues until:
      1. Natural multi-turn resolution, compromise, or customer frustration termination (6–8 turns).
      2. Total elapsed duration exceeds 5 minutes (300 seconds).
@@ -487,7 +487,7 @@ Analysis of customer simulation sessions revealed three root causes for repetiti
 - **Graceful Loop & Task Cleanup:**
   All pending asyncio tasks are cancelled and awaited before loop closure in the `finally` block, preventing unhandled exceptions in background batch writers.
 - **Authentic Human Pacing & Streaming:**
-  Alternates turns with human pacing delays (~5–7 seconds per turn, with animated typing indicators and live status updates), supporting Realistic Human, Relaxed (~7–10s), or Fast (~2s) demo modes.
+  Alternates turns with human pacing delays (~5–7 seconds per turn, with animated typing indicators and live status updates), supporting Realistic Human, Relaxed (~7–10s), Fast (~2s), or Turbo (Instant / Machine speed) demo modes.
 
 ### 3. Verification & Live Multi-Session Testing
 The enhanced architecture was validated across multiple live multi-turn scenarios:

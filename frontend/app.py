@@ -657,7 +657,7 @@ class SimulationSession:
     def __init__(self, session_id: str, persona: Dict[str, Any], pacing: str = "human"):
         self.session_id = session_id
         self.persona = persona
-        self.pacing = pacing if pacing in ("human", "relaxed", "fast") else "human"
+        self.pacing = pacing if pacing in ("human", "relaxed", "fast", "turbo") else "human"
         self.events_queue: queue.Queue = queue.Queue()
         self.events_history: List[Dict[str, Any]] = []
         self.stop_requested = threading.Event()
@@ -690,18 +690,23 @@ class SimulationSession:
 
     def _sleep_interruptible(self, duration: float) -> bool:
         """Sleeps in small slices, returning True if interrupted by user stop request."""
+        if duration <= 0:
+            return self.stop_requested.is_set()
         end = time.time() + duration
         while time.time() < end:
             if self.stop_requested.is_set():
                 return True
-            time.sleep(0.2)
+            time.sleep(0.05 if duration < 0.5 else 0.2)
         return self.stop_requested.is_set()
 
     def _get_turn_delay(self, role: str, text: str = "") -> float:
         """Calculates realistic human-mimicking delay based on role, text length, and pacing setting."""
         word_count = len(text.split()) if text else 30
 
-        if self.pacing == "fast":
+        if self.pacing == "turbo":
+            # Turbo machine pacing: zero artificial delay
+            return 0.0
+        elif self.pacing == "fast":
             # Fast demo pacing
             return random.uniform(2.0, 2.5)
         elif self.pacing == "relaxed":
@@ -857,17 +862,28 @@ Respond directly as support:
                 "opening", "Hello, I need assistance with an appliance I purchased."
             )
 
-            # Realistic human typing pause before opening message
+            # Realistic human typing pause before opening message (omitted in turbo)
+            opening_status = (
+                f"{cust_name} initiating inquiry..."
+                if self.pacing == "turbo"
+                else f"{cust_name} is typing..."
+            )
             self.emit(
                 "typing",
                 {
                     "sender": "customer",
                     "name": cust_name,
-                    "status_text": f"{cust_name} is typing...",
+                    "status_text": opening_status,
+                    "pacing": self.pacing,
                     "timestamp": time.time(),
                 },
             )
-            opening_delay = random.uniform(1.8, 2.6) if self.pacing != "fast" else 0.5
+            if self.pacing == "turbo":
+                opening_delay = 0.0
+            elif self.pacing == "fast":
+                opening_delay = 0.5
+            else:
+                opening_delay = random.uniform(1.8, 2.6)
             if self._sleep_interruptible(opening_delay):
                 return
 
@@ -912,12 +928,18 @@ Respond directly as support:
                 live_tools = []
 
                 # Initial typing indicator for service
+                initial_srv_status = (
+                    "Apex Support AI processing request..."
+                    if self.pacing == "turbo"
+                    else "Apex Support AI is reviewing details..."
+                )
                 self.emit(
                     "typing",
                     {
                         "sender": "service",
                         "name": "Apex Support AI",
-                        "status_text": "Apex Support AI is reviewing details...",
+                        "status_text": initial_srv_status,
+                        "pacing": self.pacing,
                         "timestamp": time.time(),
                     },
                 )
@@ -959,7 +981,10 @@ Respond directly as support:
 
                 # Show tool usage in typing indicator
                 tool_desc = ", ".join(t.replace("_", " ") for t in tools)
-                status_text = f"Apex Support AI reviewing {tool_desc}..." if tools else "Apex Support AI is typing..."
+                if self.pacing == "turbo":
+                    status_text = f"Apex Support AI querying {tool_desc}..." if tools else "Apex Support AI processing request..."
+                else:
+                    status_text = f"Apex Support AI reviewing {tool_desc}..." if tools else "Apex Support AI is typing..."
                 self.emit(
                     "typing",
                     {
@@ -967,6 +992,7 @@ Respond directly as support:
                         "name": "Apex Support AI",
                         "status_text": status_text,
                         "tools": tools,
+                        "pacing": self.pacing,
                         "timestamp": time.time(),
                     },
                 )
@@ -990,12 +1016,18 @@ Respond directly as support:
                 is_resolved = self._is_resolution_reached(service_text)
                 if is_resolved and turn_counter >= 5:
                     # Let the customer give a natural final acknowledgement
+                    cust_closing_status = (
+                        f"{cust_name} concluding inquiry..."
+                        if self.pacing == "turbo"
+                        else f"{cust_name} is typing..."
+                    )
                     self.emit(
                         "typing",
                         {
                             "sender": "customer",
                             "name": cust_name,
-                            "status_text": f"{cust_name} is typing...",
+                            "status_text": cust_closing_status,
+                            "pacing": self.pacing,
                             "timestamp": time.time(),
                         },
                     )
@@ -1019,12 +1051,18 @@ Respond directly as support:
                     break
 
                 # --- CUSTOMER TURN ---
+                cust_reply_status = (
+                    f"{cust_name} generating response..."
+                    if self.pacing == "turbo"
+                    else f"{cust_name} is typing..."
+                )
                 self.emit(
                     "typing",
                     {
                         "sender": "customer",
                         "name": cust_name,
-                        "status_text": f"{cust_name} is typing...",
+                        "status_text": cust_reply_status,
+                        "pacing": self.pacing,
                         "timestamp": time.time(),
                     },
                 )
@@ -1059,14 +1097,23 @@ Respond directly as support:
                 if self._is_customer_closing(customer_reply) and turn_counter >= 5:
                     break
 
-            # Brief pause before rating evaluation
-            eval_delay = random.uniform(2.5, 3.5) if self.pacing != "fast" else 1.0
+            # Brief pause before rating evaluation (skipped in turbo)
+            if self.pacing == "turbo":
+                eval_delay = 0.0
+                eval_status = f"{cust_name} evaluating satisfaction score..."
+            elif self.pacing == "fast":
+                eval_delay = 1.0
+                eval_status = f"{cust_name} is evaluating interaction satisfaction..."
+            else:
+                eval_delay = random.uniform(2.5, 3.5)
+                eval_status = f"{cust_name} is evaluating interaction satisfaction..."
             self.emit(
                 "typing",
                 {
                     "sender": "customer",
                     "name": cust_name,
-                    "status_text": f"{cust_name} is evaluating interaction satisfaction...",
+                    "status_text": eval_status,
+                    "pacing": self.pacing,
                     "timestamp": time.time(),
                 },
             )
@@ -1266,7 +1313,7 @@ def start_conversation():
     """Initiates a new customer support simulation session."""
     data = request.get_json(silent=True) or {}
     pacing = data.get("pacing", "human")
-    if pacing not in ("human", "relaxed", "fast"):
+    if pacing not in ("human", "relaxed", "fast", "turbo"):
         pacing = "human"
 
     session_id = f"sim-{int(time.time())}-{random.randint(1000, 9999)}"
