@@ -575,6 +575,67 @@
       width: 100%;
     }
 
+    .chart-loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(2px);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.65rem;
+      border-radius: 8px;
+      z-index: 20;
+      color: #94a3b8;
+      font-size: 0.82rem;
+    }
+
+    .chart-loading-overlay.active {
+      display: flex;
+    }
+
+    .chart-spinner {
+      width: 26px;
+      height: 26px;
+      border: 3px solid rgba(59, 130, 246, 0.2);
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .tab-error-banner {
+      display: none;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      border-radius: 8px;
+      padding: 0.85rem 1.25rem;
+      margin-bottom: 1.25rem;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .tab-error-banner.active {
+      display: flex;
+    }
+
+    .tab-error-content {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: #fca5a5;
+      font-size: 0.85rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+
     /* Status pulse */
     .status-indicator {
       display: inline-flex;
@@ -940,12 +1001,23 @@
           <span>BigQuery Analytics & System Telemetry</span>
           <div style="display: flex; gap: 0.75rem; align-items: center;">
             <label style="font-size: 0.8rem; color: #94a3b8; display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
-              <input type="checkbox" id="auto-refresh-toggle" checked> Auto-refresh (15s)
+              <input type="checkbox" id="auto-refresh-toggle"> Auto-refresh (15s)
             </label>
-            <button class="btn btn-outline" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="loadAnalyticsData()">
+            <button class="btn btn-outline" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="loadAnalyticsData(true)" id="btn-refresh-analytics">
               ↻ Refresh
             </button>
           </div>
+        </div>
+
+        <!-- BigQuery Error Banner -->
+        <div class="tab-error-banner" id="analytics-error-banner">
+          <div class="tab-error-content">
+            <span style="font-size: 1.1rem;">⚠️</span>
+            <span id="analytics-error-message">Unable to load BigQuery telemetry data.</span>
+          </div>
+          <button class="btn btn-danger" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="loadAnalyticsData(true)">
+            ↻ Retry Query
+          </button>
         </div>
 
         <!-- KPI summary -->
@@ -977,30 +1049,50 @@
           <div class="card" style="margin-bottom: 0;">
             <div class="card-title" style="font-size: 0.875rem;">Customer Satisfaction (CSAT) Distribution</div>
             <div class="chart-container">
+              <div class="chart-loading-overlay analytics-loading-overlay active">
+                <div class="chart-spinner"></div>
+                <span>Loading telemetry from BigQuery...</span>
+              </div>
               <canvas id="chart-ratings"></canvas>
             </div>
           </div>
           <div class="card" style="margin-bottom: 0;">
             <div class="card-title" style="font-size: 0.875rem;">Response Latency Over Time (Avg vs. p95)</div>
             <div class="chart-container">
+              <div class="chart-loading-overlay analytics-loading-overlay active">
+                <div class="chart-spinner"></div>
+                <span>Loading telemetry from BigQuery...</span>
+              </div>
               <canvas id="chart-latency"></canvas>
             </div>
           </div>
           <div class="card" style="margin-bottom: 0;">
             <div class="card-title" style="font-size: 0.875rem;">Token Consumption Over Time</div>
             <div class="chart-container">
+              <div class="chart-loading-overlay analytics-loading-overlay active">
+                <div class="chart-spinner"></div>
+                <span>Loading telemetry from BigQuery...</span>
+              </div>
               <canvas id="chart-tokens-over-time"></canvas>
             </div>
           </div>
           <div class="card" style="margin-bottom: 0;">
             <div class="card-title" style="font-size: 0.875rem;">Customer Service Tool Usage Breakdown</div>
             <div class="chart-container">
+              <div class="chart-loading-overlay analytics-loading-overlay active">
+                <div class="chart-spinner"></div>
+                <span>Loading telemetry from BigQuery...</span>
+              </div>
               <canvas id="chart-tools"></canvas>
             </div>
           </div>
           <div class="card" style="margin-bottom: 0; grid-column: 1 / -1;">
             <div class="card-title" style="font-size: 0.875rem;">Turn-by-Turn Token Breakdown (Input vs. Output Tokens)</div>
             <div class="chart-container">
+              <div class="chart-loading-overlay analytics-loading-overlay active">
+                <div class="chart-spinner"></div>
+                <span>Loading telemetry from BigQuery...</span>
+              </div>
               <canvas id="chart-tokens"></canvas>
             </div>
           </div>
@@ -1025,6 +1117,17 @@
               ↻ Refresh Analysis
             </button>
           </div>
+        </div>
+
+        <!-- BigQuery AI Error Banner -->
+        <div class="tab-error-banner" id="ca-error-banner">
+          <div class="tab-error-content">
+            <span style="font-size: 1.1rem;">⚠️</span>
+            <span id="ca-error-message">Unable to load BigQuery AI customer analysis data.</span>
+          </div>
+          <button class="btn btn-danger" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="loadCustomerAnalysisData(true)">
+            ↻ Retry Query
+          </button>
         </div>
 
         <!-- BigQuery AI Pushdown Query Trace Banner -->
@@ -1078,6 +1181,10 @@
                 <span class="badge" style="font-size: 0.7rem;">AI.CLASSIFY / Star Segments</span>
               </div>
               <div class="chart-container" style="height: 220px;">
+                <div class="chart-loading-overlay ca-loading-overlay active">
+                  <div class="chart-spinner"></div>
+                  <span>Loading customer analysis with BigQuery AI...</span>
+                </div>
                 <canvas id="ca-chart-sentiment"></canvas>
               </div>
             </div>
@@ -1087,6 +1194,10 @@
                 <span class="badge" style="font-size: 0.7rem;">CSAT Volume</span>
               </div>
               <div class="chart-container" style="height: 220px;">
+                <div class="chart-loading-overlay ca-loading-overlay active">
+                  <div class="chart-spinner"></div>
+                  <span>Loading customer analysis with BigQuery AI...</span>
+                </div>
                 <canvas id="ca-chart-stars"></canvas>
               </div>
             </div>
@@ -1343,9 +1454,17 @@
       const contentEl = document.getElementById(actualId) || document.getElementById(tabId);
       if (contentEl) contentEl.classList.add('active');
       if (actualId === 'tab-analytics' || tabId === 'tab-visualization') {
-        loadAnalyticsData();
+        if (typeof onAnalyticsTabShown === 'function') {
+          onAnalyticsTabShown();
+        } else {
+          loadAnalyticsData();
+        }
       } else if (actualId === 'tab-customer-analysis') {
-        loadCustomerAnalysisData();
+        if (typeof onCustomerAnalysisTabShown === 'function') {
+          onCustomerAnalysisTabShown();
+        } else {
+          loadCustomerAnalysisData();
+        }
       }
     }
 
@@ -1932,29 +2051,101 @@
       }
     }
 
-    // Charts instances
+    // Tab 2 Analytics Instances & State
     let chartRatings = null;
     let chartLatency = null;
     let chartTokensOverTime = null;
     let chartTokens = null;
     let chartTools = null;
 
-    async function loadAnalyticsData() {
+    let analyticsLoaded = false;
+    let analyticsLoading = false;
+    let analyticsDataCache = null;
+
+    function resizeAnalyticsCharts() {
+      [chartRatings, chartLatency, chartTokensOverTime, chartTools, chartTokens].forEach(chart => {
+        if (chart) {
+          chart.resize();
+          chart.update('none');
+        }
+      });
+    }
+
+    function onAnalyticsTabShown() {
+      const errBanner = document.getElementById('analytics-error-banner');
+      if (analyticsLoaded && analyticsDataCache) {
+        if (errBanner) errBanner.classList.remove('active');
+        if (!chartRatings) {
+          renderCharts(analyticsDataCache.charts);
+        } else {
+          resizeAnalyticsCharts();
+        }
+      } else if (!analyticsLoading) {
+        loadAnalyticsData(false);
+      }
+    }
+
+    async function loadAnalyticsData(forceRefresh = false) {
+      if (analyticsLoading && !forceRefresh) return;
+
+      const btnRefresh = document.getElementById('btn-refresh-analytics');
+      if (btnRefresh) {
+        btnRefresh.disabled = true;
+        btnRefresh.innerText = 'Refreshing...';
+      }
+
+      // Show loading overlays and hide any error banner
+      document.querySelectorAll('.analytics-loading-overlay').forEach(el => el.classList.add('active'));
+      const errBanner = document.getElementById('analytics-error-banner');
+      if (errBanner) errBanner.classList.remove('active');
+
+      analyticsLoading = true;
+
       try {
         const ts = Date.now();
+        const queryParam = forceRefresh ? `refresh=true&_=${ts}` : `_=${ts}`;
         const [sumRes, chartRes] = await Promise.all([
-          fetch(`/api/analytics/summary?_=${ts}`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`/api/analytics/charts?_=${ts}`, { cache: 'no-store' }).then(r => r.json())
+          fetch(`/api/analytics/summary?${queryParam}`, { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+          }),
+          fetch(`/api/analytics/charts?${queryParam}`, { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+          })
         ]);
 
-        // Update KPIs
-        document.getElementById('kpi-sessions').innerText = sumRes.total_sessions;
-        document.getElementById('kpi-rating').innerText = `${sumRes.avg_rating} / 5`;
-        document.getElementById('kpi-latency').innerText = `${sumRes.avg_latency_s}s`;
+        if (sumRes.status === 'ERROR' || chartRes.status === 'ERROR') {
+          throw new Error(sumRes.error || chartRes.error || 'Server error loading analytics');
+        }
 
-        renderCharts(chartRes);
+        analyticsDataCache = { summary: sumRes, charts: chartRes };
+        analyticsLoaded = true;
+
+        // Update KPIs
+        if (sumRes.total_sessions !== undefined) document.getElementById('kpi-sessions').innerText = sumRes.total_sessions;
+        if (sumRes.avg_rating !== undefined) document.getElementById('kpi-rating').innerText = `${sumRes.avg_rating} / 5`;
+        if (sumRes.avg_latency_s !== undefined) document.getElementById('kpi-latency').innerText = `${sumRes.avg_latency_s}s`;
+        if (sumRes.token_savings_percent) document.getElementById('kpi-savings').innerText = sumRes.token_savings_percent;
+
+        const tabEl = document.getElementById('tab-analytics');
+        if (tabEl && tabEl.classList.contains('active')) {
+          renderCharts(chartRes);
+        }
       } catch (err) {
         console.error('Error loading analytics data:', err);
+        if (errBanner) {
+          const msgEl = document.getElementById('analytics-error-message');
+          if (msgEl) msgEl.innerText = `Failed to load BigQuery telemetry: ${err.message}`;
+          errBanner.classList.add('active');
+        }
+      } finally {
+        analyticsLoading = false;
+        document.querySelectorAll('.analytics-loading-overlay').forEach(el => el.classList.remove('active'));
+        if (btnRefresh) {
+          btnRefresh.disabled = false;
+          btnRefresh.innerText = '↻ Refresh';
+        }
       }
     }
 
@@ -2126,13 +2317,16 @@
           }
         });
       }
+
+      // Ensure overlays are hidden once rendered
+      document.querySelectorAll('.analytics-loading-overlay').forEach(el => el.classList.remove('active'));
     }
 
-    // Auto-refresh timer
+    // Auto-refresh timer (only fires if user explicitly checked the toggle)
     setInterval(() => {
       const toggle = document.getElementById('auto-refresh-toggle');
       if (toggle && toggle.checked && document.getElementById('tab-analytics').classList.contains('active')) {
-        loadAnalyticsData();
+        loadAnalyticsData(true);
       }
     }, 15000);
 
@@ -2229,17 +2423,129 @@
       }
     }
 
+    // Tab 3 Customer Analysis State & Resize Helpers
+    let customerAnalysisLoaded = false;
+    let customerAnalysisLoading = false;
+    let customerAnalysisDataCache = null;
+
+    function resizeCustomerAnalysisCharts() {
+      [chartSentiment, chartSatisfactionStars, currentA2UIChart].forEach(chart => {
+        if (chart) {
+          chart.resize();
+          chart.update('none');
+        }
+      });
+    }
+
+    function onCustomerAnalysisTabShown() {
+      const errBanner = document.getElementById('ca-error-banner');
+      if (customerAnalysisLoaded && customerAnalysisDataCache) {
+        if (errBanner) errBanner.classList.remove('active');
+        if (!chartSentiment) {
+          renderCustomerAnalysisCharts(customerAnalysisDataCache);
+        } else {
+          resizeCustomerAnalysisCharts();
+        }
+      } else if (!customerAnalysisLoading) {
+        loadCustomerAnalysisData(false);
+      }
+    }
+
+    function renderCustomerAnalysisCharts(data) {
+      if (!data) return;
+
+      // 1. Render Sentiment Chart
+      if (data.sentiment) {
+        const s = data.sentiment;
+        const canvasS = document.getElementById('ca-chart-sentiment');
+        if (canvasS) {
+          const ctxS = canvasS.getContext('2d');
+          if (chartSentiment) chartSentiment.destroy();
+          chartSentiment = new Chart(ctxS, {
+            type: 'doughnut',
+            data: {
+              labels: [`Positive (${s.positive_pct}%)`, `Neutral (${s.neutral_pct}%)`, `Negative (${s.negative_pct}%)`],
+              datasets: [{
+                data: [s.positive || 16, s.neutral || 3, s.negative || 4],
+                backgroundColor: ['#10b981', '#f59e0b', '#f43f5e'],
+                borderWidth: 0
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } }
+              }
+            }
+          });
+        }
+      }
+
+      // 2. Render Satisfaction Stars Chart
+      if (data.satisfaction && data.satisfaction.stars_distribution) {
+        const sd = data.satisfaction.stars_distribution;
+        const canvasStars = document.getElementById('ca-chart-stars');
+        if (canvasStars) {
+          const ctxStars = canvasStars.getContext('2d');
+          if (chartSatisfactionStars) chartSatisfactionStars.destroy();
+          chartSatisfactionStars = new Chart(ctxStars, {
+            type: 'bar',
+            data: {
+              labels: ['1 Star', '2 Stars', '3 Stars', '4 Stars', '5 Stars'],
+              datasets: [{
+                label: 'Reviews Volume',
+                data: [sd['1_star'] || 0, sd['2_star'] || 4, sd['3_star'] || 3, sd['4_star'] || 8, sd['5_star'] || 8],
+                backgroundColor: ['#ef4444', '#f97316', '#f59e0b', '#3b82f6', '#10b981'],
+                borderRadius: 6
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+              }
+            }
+          });
+        }
+      }
+
+      // Hide loading overlays once charts render
+      document.querySelectorAll('.ca-loading-overlay').forEach(el => el.classList.remove('active'));
+    }
+
     async function loadCustomerAnalysisData(forceRefresh = false) {
+      if (customerAnalysisLoading && !forceRefresh) return;
+
       const btnRefresh = document.getElementById('btn-refresh-customer-analysis');
       if (btnRefresh) {
         btnRefresh.disabled = true;
         btnRefresh.innerText = 'Analyzing...';
       }
 
+      // Show loading overlays and hide any error banner
+      document.querySelectorAll('.ca-loading-overlay').forEach(el => el.classList.add('active'));
+      const errBanner = document.getElementById('ca-error-banner');
+      if (errBanner) errBanner.classList.remove('active');
+
+      customerAnalysisLoading = true;
+
       try {
-        const url = forceRefresh ? '/api/customer-analysis/dashboard?refresh=true' : '/api/customer-analysis/dashboard';
-        const res = await fetch(url);
+        const ts = Date.now();
+        const url = forceRefresh ? `/api/customer-analysis/dashboard?refresh=true&_=${ts}` : `/api/customer-analysis/dashboard?_=${ts}`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+
+        if (data.status === 'ERROR') {
+          throw new Error(data.error || 'Server error loading customer analysis');
+        }
+
+        customerAnalysisDataCache = data;
+        customerAnalysisLoaded = true;
 
         // Update KPIs
         if (data.kpis) {
@@ -2258,65 +2564,6 @@
           const eq = data.executed_query;
           document.getElementById('ca-sql-duration').innerText = `Duration: ${eq.duration_ms || 850}ms`;
           document.getElementById('ca-sql-code').innerText = eq.sql || '-- BigQuery AI Pushdown Query';
-        }
-
-        // Render Sentiment Chart
-        if (data.sentiment) {
-          const s = data.sentiment;
-          const canvasS = document.getElementById('ca-chart-sentiment');
-          if (canvasS) {
-            const ctxS = canvasS.getContext('2d');
-            if (chartSentiment) chartSentiment.destroy();
-            chartSentiment = new Chart(ctxS, {
-              type: 'doughnut',
-              data: {
-                labels: [`Positive (${s.positive_pct}%)`, `Neutral (${s.neutral_pct}%)`, `Negative (${s.negative_pct}%)`],
-                datasets: [{
-                  data: [s.positive || 16, s.neutral || 3, s.negative || 4],
-                  backgroundColor: ['#10b981', '#f59e0b', '#f43f5e'],
-                  borderWidth: 0
-                }]
-              },
-              options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } }
-                }
-              }
-            });
-          }
-        }
-
-        // Render Satisfaction Stars Chart
-        if (data.satisfaction && data.satisfaction.stars_distribution) {
-          const sd = data.satisfaction.stars_distribution;
-          const canvasStars = document.getElementById('ca-chart-stars');
-          if (canvasStars) {
-            const ctxStars = canvasStars.getContext('2d');
-            if (chartSatisfactionStars) chartSatisfactionStars.destroy();
-            chartSatisfactionStars = new Chart(ctxStars, {
-              type: 'bar',
-              data: {
-                labels: ['1 Star', '2 Stars', '3 Stars', '4 Stars', '5 Stars'],
-                datasets: [{
-                  label: 'Reviews Volume',
-                  data: [sd['1_star'] || 0, sd['2_star'] || 4, sd['3_star'] || 3, sd['4_star'] || 8, sd['5_star'] || 8],
-                  backgroundColor: ['#ef4444', '#f97316', '#f59e0b', '#3b82f6', '#10b981'],
-                  borderRadius: 6
-                }]
-              },
-              options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                  y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
-                  x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
-                }
-              }
-            });
-          }
         }
 
         // Render Verbal Feedback Themes
@@ -2361,9 +2608,22 @@
             `).join('');
           }
         }
+
+        // Render charts if Tab 3 is active
+        const tabEl = document.getElementById('tab-customer-analysis');
+        if (tabEl && tabEl.classList.contains('active')) {
+          renderCustomerAnalysisCharts(data);
+        }
       } catch (err) {
         console.error('Error loading customer analysis dashboard:', err);
+        if (errBanner) {
+          const msgEl = document.getElementById('ca-error-message');
+          if (msgEl) msgEl.innerText = `Failed to load BigQuery AI customer analysis: ${err.message}`;
+          errBanner.classList.add('active');
+        }
       } finally {
+        customerAnalysisLoading = false;
+        document.querySelectorAll('.ca-loading-overlay').forEach(el => el.classList.remove('active'));
         if (btnRefresh) {
           btnRefresh.disabled = false;
           btnRefresh.innerText = '↻ Refresh Analysis';
@@ -2692,6 +2952,10 @@
 
     // Initial check for auditor queries on load
     checkExistingAuditorQueries();
+
+    // Startup background refresh for Tab 2 (Analytics) and Tab 3 (Customer Analysis)
+    loadAnalyticsData(false);
+    loadCustomerAnalysisData(false);
   </script>
 </body>
 </html>
