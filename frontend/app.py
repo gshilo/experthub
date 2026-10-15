@@ -636,10 +636,11 @@ UNNEST([AI.GENERATE(
 LATEST_AUDIT_REPORT: Optional[Dict[str, Any]] = None
 LATEST_AUDITOR_QUERIES: List[Dict[str, Any]] = []
 
-# In-memory cache for customer analysis static dashboard
-CUSTOMER_ANALYSIS_CACHE: Dict[str, Any] = {}
-CUSTOMER_ANALYSIS_CACHE_TIME: float = 0.0
-CUSTOMER_ANALYSIS_CACHE_TTL: float = 60.0  # seconds
+# In-memory indefinite cache for Tab 2 (Analytics) and Tab 3 (Customer Analysis)
+CUSTOMER_ANALYSIS_CACHE: Optional[Dict[str, Any]] = None
+ANALYTICS_SUMMARY_CACHE: Optional[Dict[str, Any]] = None
+ANALYTICS_CHARTS_CACHE: Optional[Dict[str, Any]] = None
+
 
 from google.cloud import bigquery
 
@@ -1421,11 +1422,10 @@ def get_auditor_queries():
 @app.route("/api/customer-analysis/dashboard", methods=["GET"])
 def get_customer_analysis_dashboard():
     """Returns static customer sentiment, satisfaction, and product defect/return analysis from Auditor Agent."""
-    global CUSTOMER_ANALYSIS_CACHE, CUSTOMER_ANALYSIS_CACHE_TIME
+    global CUSTOMER_ANALYSIS_CACHE
     force_refresh = request.args.get("refresh", "false").lower() == "true"
-    now = time.time()
 
-    if not force_refresh and CUSTOMER_ANALYSIS_CACHE and (now - CUSTOMER_ANALYSIS_CACHE_TIME < CUSTOMER_ANALYSIS_CACHE_TTL):
+    if not force_refresh and CUSTOMER_ANALYSIS_CACHE is not None:
         resp = jsonify(CUSTOMER_ANALYSIS_CACHE)
         resp.headers["X-Cache"] = "HIT"
         return resp
@@ -1433,13 +1433,12 @@ def get_customer_analysis_dashboard():
     try:
         data = query_customer_analysis_static_bq(PROJECT_ID)
         CUSTOMER_ANALYSIS_CACHE = data
-        CUSTOMER_ANALYSIS_CACHE_TIME = now
         resp = jsonify(data)
         resp.headers["X-Cache"] = "MISS"
         return resp
     except Exception as e:
         logger.error(f"Error computing customer analysis dashboard: {e}")
-        if CUSTOMER_ANALYSIS_CACHE:
+        if CUSTOMER_ANALYSIS_CACHE is not None:
             return jsonify(CUSTOMER_ANALYSIS_CACHE)
         return jsonify({"status": "ERROR", "error": str(e)}), 500
 
@@ -1460,9 +1459,8 @@ def post_customer_analysis_query():
         return jsonify({"status": "ERROR", "error": str(e)}), 500
 
 
-@app.route("/api/analytics/summary")
-def analytics_summary():
-    """Returns top-level KPIs for the analytics dashboard."""
+def query_analytics_summary_data() -> Dict[str, Any]:
+    """Queries BigQuery for top-level KPIs for Tab 2 analytics."""
     total_sessions = 28
     avg_rating = 4.3
     avg_latency = 2.4
@@ -1495,19 +1493,16 @@ def analytics_summary():
     except Exception as e:
         logger.info(f"BigQuery summary notice: {e}")
 
-    resp = jsonify({
+    return {
         "total_sessions": total_sessions,
         "avg_rating": avg_rating,
         "avg_latency_s": avg_latency,
         "token_savings_percent": "28%",
-    })
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return resp
+    }
 
 
-@app.route("/api/analytics/charts")
-def analytics_charts():
-    """Returns chart datasets for Chart.js in Tab 2."""
+def query_analytics_charts_data() -> Dict[str, Any]:
+    """Queries BigQuery for chart datasets for Tab 2 analytics."""
     ratings_dist = [1, 2, 4, 8, 13]
     tools_breakdown = [14, 18, 11, 8, 12]
     latency_labels = ["10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"]
@@ -1564,7 +1559,7 @@ def analytics_charts():
         except Exception as e:
             logger.info(f"BigQuery tools view query notice: {e}")
 
-        # 3. Latency timeline from agent_telemetry.v_llm_response (latest time buckets in chronological order)
+        # 3. Latency timeline from agent_telemetry.v_llm_response
         try:
             q_latency = f"""
                 SELECT
@@ -1595,7 +1590,7 @@ def analytics_charts():
         except Exception as e:
             logger.info(f"BigQuery latency view query notice: {e}")
 
-        # 4. Token consumption over time timeline from agent_telemetry.v_llm_response (latest time buckets)
+        # 4. Token consumption over time timeline from agent_telemetry.v_llm_response
         try:
             q_tokens_time = f"""
                 SELECT
@@ -1681,7 +1676,7 @@ def analytics_charts():
         "total_tokens": tokens_time_total,
     }
 
-    resp = jsonify({
+    return {
         "ratings_dist": ratings_dist,
         "latency_timeline": {
             "labels": latency_labels,
@@ -1696,9 +1691,96 @@ def analytics_charts():
             "output_tokens": tokens_output,
         },
         "tools_breakdown": tools_breakdown,
-    })
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return resp
+    }
+
+
+def prewarm_tab_caches():
+    """Warms Tab 2 (Analytics) and Tab 3 (Customer Analysis) caches in background daemon thread on startup."""
+    def _worker():
+        global ANALYTICS_SUMMARY_CACHE, ANALYTICS_CHARTS_CACHE, CUSTOMER_ANALYSIS_CACHE
+        logger.info("[Startup Warmup] Pre-warming background caches for Tab 2 & Tab 3...")
+        try:
+            ANALYTICS_SUMMARY_CACHE = query_analytics_summary_data()
+            logger.info("[Startup Warmup] Analytics summary cache pre-warmed successfully.")
+        except Exception as e:
+            logger.warning(f"[Startup Warmup] Error pre-warming analytics summary: {e}")
+
+        try:
+            ANALYTICS_CHARTS_CACHE = query_analytics_charts_data()
+            logger.info("[Startup Warmup] Analytics charts cache pre-warmed successfully.")
+        except Exception as e:
+            logger.warning(f"[Startup Warmup] Error pre-warming analytics charts: {e}")
+
+        try:
+            CUSTOMER_ANALYSIS_CACHE = query_customer_analysis_static_bq(PROJECT_ID)
+            logger.info("[Startup Warmup] Customer analysis cache pre-warmed successfully.")
+        except Exception as e:
+            logger.warning(f"[Startup Warmup] Error pre-warming customer analysis: {e}")
+
+        logger.info("[Startup Warmup] Background cache pre-warm completed.")
+
+    thread = threading.Thread(target=_worker, daemon=True, name="StartupCachePrewarmThread")
+    thread.start()
+
+
+@app.route("/api/analytics/summary")
+def analytics_summary():
+    """Returns top-level KPIs for the analytics dashboard with indefinite caching until manual refresh."""
+    global ANALYTICS_SUMMARY_CACHE
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+
+    if not force_refresh and ANALYTICS_SUMMARY_CACHE is not None:
+        resp = jsonify(ANALYTICS_SUMMARY_CACHE)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["X-Cache"] = "HIT"
+        return resp
+
+    try:
+        data = query_analytics_summary_data()
+        ANALYTICS_SUMMARY_CACHE = data
+        resp = jsonify(data)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["X-Cache"] = "MISS"
+        return resp
+    except Exception as e:
+        logger.error(f"Error computing analytics summary: {e}")
+        if ANALYTICS_SUMMARY_CACHE is not None:
+            resp = jsonify(ANALYTICS_SUMMARY_CACHE)
+            resp.headers["X-Cache"] = "HIT-FALLBACK"
+            return resp
+        return jsonify({"status": "ERROR", "error": str(e)}), 500
+
+
+@app.route("/api/analytics/charts")
+def analytics_charts():
+    """Returns chart datasets for Chart.js in Tab 2 with indefinite caching until manual refresh."""
+    global ANALYTICS_CHARTS_CACHE
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+
+    if not force_refresh and ANALYTICS_CHARTS_CACHE is not None:
+        resp = jsonify(ANALYTICS_CHARTS_CACHE)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["X-Cache"] = "HIT"
+        return resp
+
+    try:
+        data = query_analytics_charts_data()
+        ANALYTICS_CHARTS_CACHE = data
+        resp = jsonify(data)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["X-Cache"] = "MISS"
+        return resp
+    except Exception as e:
+        logger.error(f"Error computing analytics charts: {e}")
+        if ANALYTICS_CHARTS_CACHE is not None:
+            resp = jsonify(ANALYTICS_CHARTS_CACHE)
+            resp.headers["X-Cache"] = "HIT-FALLBACK"
+            return resp
+        return jsonify({"status": "ERROR", "error": str(e)}), 500
+
+
+# Start the background cache warmup daemon on server startup
+prewarm_tab_caches()
 
 
 if __name__ == "__main__":
