@@ -616,10 +616,18 @@ UNNEST([AI.GENERATE(
             },
         }
 
-    def process_customer_analysis_query(question: str, project_id: str = PROJECT_ID) -> Dict[str, Any]:
+    def process_customer_analysis_query(
+        question: str,
+        project_id: str = PROJECT_ID,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        is_conv = any(w in question.lower() for w in ["suggest", "recommend", "how", "why", "improve", "advice"])
         return {
             "status": "SUCCESS",
+            "response_type": "conversational_verbal" if is_conv else "chart_and_sql",
+            "intent": "conversational_verbal" if is_conv else "chart_and_sql",
             "question": question,
+            "verbal_response": f"Auditor analysis grounded in telemetry & ratings for: {question}",
             "answer_summary": f"Analyzed customer satisfaction and defect telemetry for: {question}",
             "a2ui_payload": [],
             "query_record": {
@@ -630,6 +638,10 @@ UNNEST([AI.GENERATE(
                 "ai_functions": ["AI.GENERATE"],
                 "row_count": 5,
             },
+            "suggestions": [
+                "What is the percentage of positive customer interactions over time",
+                "What do you suggest us to do in order to improve customer experience ?",
+            ],
         }
 
 # In-memory storage for latest auditor run report and queries
@@ -1496,10 +1508,11 @@ def post_customer_analysis_query():
     try:
         req_json = request.get_json(silent=True) or {}
         question = req_json.get("question", "").strip()
+        history = req_json.get("history", [])
         if not question:
             return jsonify({"status": "ERROR", "error": "Question is required"}), 400
 
-        result = process_customer_analysis_query(question, PROJECT_ID)
+        result = process_customer_analysis_query(question, PROJECT_ID, conversation_history=history)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error handling customer analysis dynamic query: {e}")
