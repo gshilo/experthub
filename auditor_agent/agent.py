@@ -2277,10 +2277,10 @@ CRITICAL RULES:
 1. Select the appropriate table(s)/view(s) based on the user's question:
    - If the question is about agent telemetry, user intents, agent decisions, tool calls, latency, or tokens, query `{project_id}.agent_telemetry` (`agent_events`, `v_tool_completed`, `v_tool_starting`, `v_agent_response`, `v_llm_response`, etc.).
    - If the question is about customer ratings, CSAT, or post-session feedback, query `{project_id}.demo.customer_ratings`.
-2. If the question asks for trends, satisfaction/sentiment over time, history, daily/hourly change:
+2. If the question asks for trends, satisfaction/sentiment/interactions over time, history, or hourly/daily change:
    - Must use `AI.CLASSIFY` to assign sentiment ('Positive', 'Neutral', 'Negative') to each row.
-   - If querying turn-level user messages, extract text from `{project_id}.agent_telemetry.agent_events` where `event_type = 'USER_MESSAGE_RECEIVED'` using `JSON_VALUE(content, '$.text_summary')`.
-   - Aggregate by time unit using `TIMESTAMP_TRUNC(timestamp, DAY)` (or `HOUR` if hourly is requested) AS `time_bucket`.
+   - By default, query `{project_id}.demo.customer_ratings` (classifying `description` and averaging `rating`). Only query `{project_id}.agent_telemetry.agent_events` (`event_type = 'USER_MESSAGE_RECEIVED'` with `JSON_VALUE(content, '$.text_summary')`) if the user explicitly asks for turn-level chat messages.
+   - Aggregate by hourly time unit using `TIMESTAMP_TRUNC(timestamp, HOUR)` AS `time_bucket` (always use `HOUR` granularity for time-series charts, not `DAY`).
    - Group by `time_bucket` and calculate:
      - `total_interactions`: COUNT(*)
      - `positive_count`: COUNTIF(sentiment = 'Positive')
@@ -2290,18 +2290,18 @@ CRITICAL RULES:
      - `neutral_pct`: ROUND(100.0 * COUNTIF(sentiment = 'Neutral') / COUNT(*), 1)
      - `negative_pct`: ROUND(100.0 * COUNTIF(sentiment = 'Negative') / COUNT(*), 1)
      - `avg_csat`: ROUND(AVG(rating), 2) (or mapped 1-5 score for turn sentiment)
-   - Sort by `time_bucket ASC`, set `chart_type` to 'line', and `is_time_series` to true.
+   - Sort by `time_bucket ASC`, set `chart_type` to 'line', `time_bucket` to 'HOUR', and `is_time_series` to true.
 3. If the question is a categorical, qualitative breakdown, or aggregate chart (not time-series):
    - Write a BigQuery SQL query (using `AI.CLASSIFY`, `AI.IF`, `AI.SCORE`, or `GROUP BY` on telemetry/ratings columns) that returns rows where the first column is `category_label` (STRING) and the second column is `metric_value` (INT64 or FLOAT64), plus any descriptive detail columns (e.g. `detail_1`, `detail_2`).
    - Set `is_time_series` to false and `chart_type` to 'bar' or 'doughnut'.
 4. Return ONLY a JSON object conforming to this schema (no markdown, no backticks):
 {{
   "is_time_series": true | false,
-  "time_bucket": "DAY",
+  "time_bucket": "HOUR",
   "chart_type": "line" | "bar" | "doughnut",
   "title": "Short descriptive title",
   "target_sentiment": "positive" | "negative" | "neutral" | "all",
-  "tables_referenced": ["{project_id}.agent_telemetry.agent_events"],
+  "tables_referenced": ["{project_id}.demo.customer_ratings"],
   "ai_functions": ["AI.CLASSIFY"],
   "sql": "SELECT ..."
 }}
@@ -2963,7 +2963,7 @@ def _process_chart_analysis_query(
 
     # Step 2: Determine if this is a time-series / temporal query
     is_time_series = False
-    time_bucket = "DAY"
+    time_bucket = "HOUR"
     chart_type = "bar"
     chart_title = "Analysis Results"
     ai_functions = ["AI.CLASSIFY"]
@@ -2971,13 +2971,25 @@ def _process_chart_analysis_query(
 
     if dynamic_gen and dynamic_gen.get("is_time_series"):
         is_time_series = True
-        time_bucket = dynamic_gen.get("time_bucket", "DAY").upper()
+        time_bucket = "HOUR"
         chart_type = dynamic_gen.get("chart_type", "line")
-        grain_label = "hourly" if time_bucket == "HOUR" else "daily"
+        grain_label = "hourly"
         chart_title = dynamic_gen.get("title", f"Customer Satisfaction Over Time ({grain_label})")
         ai_functions = dynamic_gen.get("ai_functions", ["AI.CLASSIFY"])
         tables_referenced = dynamic_gen.get("tables_referenced", [f"{project_id}.demo.customer_ratings"])
         sql = dynamic_gen["sql"]
+        sql = re.sub(
+            r"TIMESTAMP_TRUNC\(\s*([^,]+?)\s*,\s*DAY\s*\)",
+            r"TIMESTAMP_TRUNC(\1, HOUR)",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        sql = re.sub(
+            r"DATE_TRUNC\(\s*([^,]+?)\s*,\s*DAY\s*\)",
+            r"TIMESTAMP_TRUNC(\1, HOUR)",
+            sql,
+            flags=re.IGNORECASE,
+        )
     elif any(
         w in q_lower
         for w in [
@@ -2988,8 +3000,8 @@ def _process_chart_analysis_query(
         ]
     ):
         is_time_series = True
-        time_bucket = "HOUR" if any(w in q_lower for w in ["hour", "hourly"]) else "DAY"
-        grain_label = "hourly" if time_bucket == "HOUR" else "daily"
+        time_bucket = "HOUR"
+        grain_label = "hourly"
         chart_type = "line"
         chart_title = f"Customer Satisfaction & Sentiment Trend Over Time ({grain_label})"
         ai_functions = ["AI.CLASSIFY"]
