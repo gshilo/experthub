@@ -41,16 +41,26 @@ TABLE_ID = "customer_ratings"
 MODEL_NAME = "gemini-3.8-flash"
 
 
+_SECRET_CACHE: Dict[str, str] = {}
+_GENAI_CLIENT: Optional[genai.Client] = None
+
+
 def get_secret(secret_id: str, project: str = PROJECT_ID) -> str:
-    """Retrieves secret from Google Cloud Secret Manager with fallback to env var.
+    """Retrieves secret from Google Cloud Secret Manager with in-memory cache and fallback to env var.
 
     API keys and credentials are never stored in static files.
     """
+    cache_key = f"{project}:{secret_id}"
+    if cache_key in _SECRET_CACHE:
+        return _SECRET_CACHE[cache_key]
+
     try:
         client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{project}/secrets/{secret_id}/versions/latest"
         response = client.access_secret_version(request={"name": name})
         secret_value = response.payload.data.decode("UTF-8").strip()
+        if secret_value:
+            _SECRET_CACHE[cache_key] = secret_value
         logger.info(f"Retrieved secret '{secret_id}' directly from Secret Manager.")
         return secret_value
     except Exception as e:
@@ -60,7 +70,9 @@ def get_secret(secret_id: str, project: str = PROJECT_ID) -> str:
     if secret_id in ("gemini-api-key", "google-api-key"):
         env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if env_key:
-            return env_key.strip()
+            val = env_key.strip()
+            _SECRET_CACHE[cache_key] = val
+            return val
     return ""
 
 
@@ -83,6 +95,10 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
     Retrieves secret from Google Cloud Secret Manager ('gemini-api-key' or fallback 'google-api-key')
     and populates os.environ dynamically at runtime. The key is never read from or stored in static files.
     """
+    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if existing_key and not is_placeholder_token(existing_key):
+        return existing_key
+
     for secret_name in ("gemini-api-key", "google-api-key"):
         val = get_secret(secret_name, project=project_id)
         if val and not is_placeholder_token(val):
@@ -91,12 +107,17 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
             logger.info(f"Dynamically loaded Gemini API key from Secret Manager secret '{secret_name}' (not static files).")
             return val
 
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not is_placeholder_token(existing_key):
-        return existing_key
-
     logger.warning("No Gemini API key found in Secret Manager ('gemini-api-key') or environment.")
     return None
+
+
+def _get_genai_client() -> genai.Client:
+    """Returns a cached google.genai.Client instance for low-latency connection reuse."""
+    global _GENAI_CLIENT
+    ensure_gemini_api_key(PROJECT_ID)
+    if _GENAI_CLIENT is None:
+        _GENAI_CLIENT = genai.Client()
+    return _GENAI_CLIENT
 
 
 # Ensure Gemini API key is loaded into environment from Secret Manager before agent execution
@@ -446,13 +467,14 @@ Return a valid JSON object with EXACTLY the following keys:
 """
 
     try:
-        client = genai.Client()
+        client = _get_genai_client()
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=1.05,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
@@ -547,12 +569,13 @@ Respond naturally as {cust_name}:
 """
 
     try:
-        client = genai.Client()
+        client = _get_genai_client()
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.9,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         reply = response.text.strip()
@@ -624,13 +647,14 @@ Return JSON:
 """
 
     try:
-        client = genai.Client()
+        client = _get_genai_client()
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.7,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         data = json.loads(response.text.strip())
@@ -688,6 +712,9 @@ root_agent = Agent(
         "with authentic feedback persisted to BigQuery."
     ),
     model="gemini-3.8-flash",
+    generate_content_config=types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    ),
     instruction=(
         "You are an authentic, realistic customer contacting ApexHome & Electro support. "
         "Speak naturally from your persona's perspective. You possess authentic human emotions: "

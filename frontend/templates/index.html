@@ -1725,6 +1725,9 @@
           eventSource.close();
           eventSource = null;
         }
+        if (typeof triggerConversationPrewarm === 'function') {
+          triggerConversationPrewarm();
+        }
       }
 
       function processEvent(eventType, d) {
@@ -3305,7 +3308,17 @@
       }
     }
 
-    // Initial check for auditor queries on load
+    // Ensure the backend conversation pre-warm pool (2 slots: persona + order + Turn 1 + Turn 2) is warm
+    async function triggerConversationPrewarm() {
+      try {
+        await fetch('/api/conversation/prewarm', { method: 'POST' });
+      } catch (e) {
+        console.debug('Prewarm ping note:', e);
+      }
+    }
+
+    // Initial check for auditor queries and conversation prewarm on load
+    triggerConversationPrewarm();
     checkExistingAuditorQueries();
 
     // Startup background refresh for Tab 2 (Analytics) and Tab 3 (Customer Analysis)

@@ -44,6 +44,10 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
     The API key is dynamically fetched from Google Cloud Secret Manager at runtime
     and is never stored in static files or client-side assets.
     """
+    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if existing_key and not existing_key.startswith("PLACEHOLDER"):
+        return existing_key
+
     try:
         from google.cloud import secretmanager
         client = secretmanager.SecretManagerServiceClient()
@@ -62,10 +66,6 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
     except Exception as e:
         logger.warning(f"Could not load Gemini API key from Secret Manager: {e}")
 
-    # Fallback to pre-existing environment variable if Secret Manager call fails
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not existing_key.startswith("PLACEHOLDER"):
-        return existing_key
     return None
 
 
@@ -77,6 +77,7 @@ ensure_gemini_api_key(PROJECT_ID)
 try:
     from customer_agent.agent import (
         PERSONA_CATALOG,
+        _procedural_fallback_persona,
         generate_customer_persona,
         generate_customer_turn,
         evaluate_customer_experience,
@@ -241,6 +242,9 @@ except Exception as e:
             "turns_count": 0,
         }
 
+    def _procedural_fallback_persona(category_hint: str = "") -> Dict[str, Any]:
+        return generate_customer_persona()
+
     def write_customer_rating_to_bigquery(
         customer_id: int,
         customer_name: str,
@@ -277,6 +281,7 @@ try:
         fetch_okf_dynamic_context,
         get_instructions,
         initiate_return,
+        invalidate_okf_cache,
         lookup_billing_and_refund_status,
         lookup_warranty_policy,
         register_customer_order,
@@ -308,6 +313,9 @@ except Exception as e:
         pass
 
     def fetch_okf_dynamic_context() -> str:
+        return ""
+
+    def invalidate_okf_cache(refresh_immediately: bool = True) -> str:
         return ""
 
     def check_order_status(order_id: str) -> str:
@@ -654,10 +662,453 @@ ANALYTICS_SUMMARY_CACHE: Optional[Dict[str, Any]] = None
 ANALYTICS_CHARTS_CACHE: Optional[Dict[str, Any]] = None
 
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from google.cloud import bigquery
 
 # In-memory storage for active simulation sessions: {session_id: SessionState}
 SESSIONS: Dict[str, "SimulationSession"] = {}
+
+# Shared GenAI client and persistent ADK runtime loop/runner
+_FRONTEND_GENAI_CLIENT: Optional[Any] = None
+_ADK_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_ADK_RUNNER: Optional[Any] = None
+_ADK_INIT_LOCK = threading.Lock()
+_TURN_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="TurnPrefetchWorker")
+
+# Pre-warmed conversation pool configuration
+PREWARM_POOL_TARGET = 2
+PREWARM_POOL: List["PrewarmedDialogSlot"] = []
+_PREWARM_LOCK = threading.Lock()
+_PREWARM_GENERATION: int = 1
+_PREWARM_BUILDER_SEMAPHORE = threading.Semaphore(1)
+
+
+def _get_frontend_genai_client():
+    """Returns a cached google.genai.Client instance for frontend fallback turn generation."""
+    global _FRONTEND_GENAI_CLIENT
+    ensure_gemini_api_key(PROJECT_ID)
+    if _FRONTEND_GENAI_CLIENT is None:
+        from google import genai
+        _FRONTEND_GENAI_CLIENT = genai.Client()
+    return _FRONTEND_GENAI_CLIENT
+
+
+def _ensure_adk_runtime() -> Tuple[Optional[asyncio.AbstractEventLoop], Optional[Any]]:
+    """Initializes and returns a persistent background asyncio event loop and shared ADK InMemoryRunner."""
+    global _ADK_LOOP, _ADK_RUNNER
+    if _ADK_LOOP is not None and _ADK_RUNNER is not None and not _ADK_LOOP.is_closed():
+        return _ADK_LOOP, _ADK_RUNNER
+
+    if not customer_service_app:
+        return None, None
+
+    with _ADK_INIT_LOCK:
+        if _ADK_LOOP is not None and _ADK_RUNNER is not None and not _ADK_LOOP.is_closed():
+            return _ADK_LOOP, _ADK_RUNNER
+
+        try:
+            from google.adk.runners import InMemoryRunner
+
+            loop_ready = threading.Event()
+
+            def _run_persistent_adk_loop():
+                global _ADK_LOOP, _ADK_RUNNER
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                _ADK_LOOP = loop
+                _ADK_RUNNER = InMemoryRunner(app=customer_service_app)
+                loop_ready.set()
+                loop.run_forever()
+
+            t = threading.Thread(
+                target=_run_persistent_adk_loop,
+                daemon=True,
+                name="ADKPersistentEventLoop",
+            )
+            t.start()
+            loop_ready.wait(timeout=5.0)
+            logger.info("Initialized persistent ADK event loop and shared InMemoryRunner.")
+        except Exception as e:
+            logger.warning(f"Could not initialize persistent ADK runtime: {e}")
+
+    return _ADK_LOOP, _ADK_RUNNER
+
+
+def _create_adk_session(user_id: str) -> Optional[str]:
+    """Creates a new ADK session on the shared persistent InMemoryRunner."""
+    loop, runner = _ensure_adk_runtime()
+    if not loop or not runner or not customer_service_app:
+        return None
+    try:
+        coro = runner.session_service.create_session(
+            app_name=customer_service_app.name, user_id=user_id
+        )
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        adk_session = fut.result(timeout=10.0)
+        return adk_session.id
+    except Exception as e:
+        logger.warning(f"ADK session creation fallback: {e}")
+        return None
+
+
+def _sanitize_human_service_text_static(text: str) -> str:
+    """Sanitizes service text to ensure human-like brevity, no markdown bolding, and no long dashes."""
+    if not text:
+        return ""
+    cleaned = text.replace("**", "").replace("*", "")
+    cleaned = re.sub(r'[\u2014\u2013]|--', ', ', cleaned)
+    cleaned = re.sub(r'^(Apex Support AI|Apex Support|Support|Agent):\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip('"').strip()
+
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', cleaned) if s.strip()]
+    if len(sentences) > 3:
+        cleaned = " ".join(sentences[:3]).strip()
+    return cleaned
+
+
+def _generate_dynamic_service_turn_static(
+    persona: Dict[str, Any],
+    history: List[Dict[str, str]],
+    last_customer_text: str,
+) -> Tuple[str, List[str]]:
+    """Generates a dynamic, in-character customer service turn using Gemini 3.8 Flash."""
+    ensure_gemini_api_key(PROJECT_ID)
+    prod = persona.get("product", "item")
+    cust_name = persona.get("customer_name", "Customer")
+    order_id = persona.get("order_id", "ORD-1001")
+    category = persona.get("category", "General Inquiry")
+
+    history_lines = []
+    for t in history[-8:]:
+        role = "Customer" if t.get("role") == "customer" else "Apex Support AI"
+        history_lines.append(f"{role}: {t.get('content', '')}")
+    hist_block = "\n".join(history_lines)
+
+    okf_context = fetch_okf_dynamic_context().strip()
+    okf_prompt_addition = f"\nActive Dynamic OKF Rules:\n{okf_context}\n" if okf_context else ""
+
+    prompt = f"""You are a human customer service representative working live support chat for ApexHome & Electro.
+Customer: {cust_name}
+Order ID: {order_id}
+Product: {prod}
+Category: {category}
+{okf_prompt_addition}
+Conversation History:
+{hist_block}
+
+Customer just said:
+"{last_customer_text}"
+
+Strict Guidelines:
+- Speak like an authentic human support representative on live chat.
+- LENGTH LIMIT: Strictly maximum 2 to 3 sentences per response. Never write more than 3 sentences.
+- NO MARKDOWN BOLDING: Absolutely never use '**' for bold text. Write plain text only.
+- NO LONG DASHES: Never use long dashes (em-dash, en-dash, or double hyphens '--'). Use commas or standard periods.
+- Tone & Demeanor: Do not always give the most great, helpful, or overly polite answers. Avoid robotic corporate pleasantries or endless apologies. Real support agents can be blunt, dry, tired, skeptical, or firm.
+- Realistic Conflict: You can get into slight conflict with the customer. Stand firm on store policies (30-day returns, 15% open-box restocking fee, remote diagnostics first, 48-hour carrier traces) and push back if the customer is demanding, unreasonable, or refuses testing.
+
+Respond directly as support:
+"""
+    tools_used = ["search_product_catalog"]
+    lower_input = last_customer_text.lower()
+    if "order" in lower_input or "tracking" in lower_input or "deliver" in lower_input or "ship" in lower_input:
+        tools_used = ["check_order_status"]
+    elif "warranty" in lower_input or "repair" in lower_input or "technician" in lower_input:
+        tools_used = ["lookup_warranty_policy"]
+    elif "return" in lower_input or "refund" in lower_input or "rma" in lower_input or "exchange" in lower_input:
+        tools_used = ["initiate_return"]
+    elif "charge" in lower_input or "fee" in lower_input or "card" in lower_input or "bill" in lower_input or "bank" in lower_input:
+        tools_used = ["lookup_billing_and_refund_status"]
+
+    try:
+        from google.genai import types
+
+        client = _get_frontend_genai_client()
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.85,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        text = response.text.strip()
+        text = re.sub(r'^(Apex Support AI|Apex Support|Support|Agent):\s*', '', text, flags=re.IGNORECASE)
+        return _sanitize_human_service_text_static(text), tools_used
+    except Exception as e:
+        logger.warning(f"Dynamic service turn fallback: {e}")
+        ticket_num = f"TC-{random.randint(10000, 99999)}"
+        return (
+            f"I noted your issue with the {prod} under reference {ticket_num}. We need you to check the power and error code before we can discuss an exchange or technician.",
+            tools_used,
+        )
+
+
+def _execute_service_turn(
+    adk_session_id: Optional[str],
+    adk_user_id: str,
+    last_customer_text: str,
+    persona: Dict[str, Any],
+    history: List[Dict[str, str]],
+) -> Tuple[str, List[str]]:
+    """Executes a Customer Service Agent turn on the shared ADK runtime with fallback to direct model call."""
+    live_text = ""
+    live_tools: List[str] = []
+    loop, runner = _ensure_adk_runtime()
+
+    if loop and runner and adk_session_id and last_customer_text:
+        try:
+            async def _run_agent_turn():
+                nonlocal live_text, live_tools
+                from google.genai.types import Content, Part
+                c_content = Content(role="user", parts=[Part.from_text(text=last_customer_text)])
+                async for evt in runner.run_async(
+                    session_id=adk_session_id, user_id=adk_user_id, new_message=c_content
+                ):
+                    if evt.content and evt.content.parts:
+                        for p in evt.content.parts:
+                            if p.text:
+                                live_text += p.text
+                            if p.function_call:
+                                live_tools.append(p.function_call.name)
+                if customer_service_telemetry_plugin:
+                    try:
+                        asyncio.create_task(customer_service_telemetry_plugin.flush())
+                    except Exception:
+                        pass
+
+            fut = asyncio.run_coroutine_threadsafe(_run_agent_turn(), loop)
+            fut.result(timeout=35.0)
+        except Exception as live_err:
+            logger.info(f"ADK customer service turn execution note: {live_err}")
+
+    if not live_text.strip():
+        live_text, fb_tools = _generate_dynamic_service_turn_static(persona, history, last_customer_text)
+        if not live_tools:
+            live_tools = fb_tools
+
+    service_text = _sanitize_human_service_text_static(live_text)
+    tools = live_tools or ["search_product_catalog"]
+    return service_text, tools
+
+
+def _register_order_for_persona(persona: Dict[str, Any]) -> None:
+    """Registers dynamic order with customer service tools so lookup tools find it."""
+    try:
+        register_customer_order({
+            "order_id": persona.get("order_id"),
+            "customer_name": persona.get("customer_name"),
+            "product_name": persona.get("product"),
+            "status": "Delivered" if "Return" in persona.get("category", "") or "Hardware" in persona.get("category", "") else "In Transit",
+            "carrier": "FedEx Freight Priority" if "freight" in persona.get("product", "").lower() or "tv" in persona.get("product", "").lower() else "UPS Expedited",
+            "tracking_number": f"TRK-{abs(hash(persona.get('order_id', '1000'))) % 89999999 + 10000000}",
+            "delivery_date": "Recently Delivered" if "Hardware" in persona.get("category", "") else "Expected Tomorrow by 2:00 PM",
+            "total_amount": f"${random.randint(399, 2899)}.00",
+            "issue_category": persona.get("category"),
+            "issue_notes": persona.get("issue"),
+        })
+    except Exception as reg_err:
+        logger.info(f"Dynamic order registration note: {reg_err}")
+
+
+# =====================================================================
+# Pre-Warmed Dialog Pool Manager (Target Pool Size = 2)
+# =====================================================================
+class PrewarmedDialogSlot:
+    """Holds a pre-warmed customer persona (Turn 1), registered order, ADK session, and Customer Service reply (Turn 2)."""
+
+    def __init__(self, slot_id: str, generation: int):
+        self.slot_id = slot_id
+        self.generation = generation
+        self.created_at = time.time()
+        self.persona: Optional[Dict[str, Any]] = None
+        self.adk_session_id: Optional[str] = None
+        self.adk_user_id: Optional[str] = None
+        self.turn2_text: Optional[str] = None
+        self.turn2_tools: List[str] = []
+        self.persona_ready = threading.Event()
+        self.turn2_ready = threading.Event()
+        self.is_building = True
+
+
+def _populate_prewarm_slot(slot: PrewarmedDialogSlot) -> None:
+    """Background worker that populates a PrewarmedDialogSlot with Persona (Turn 1), ADK session, and Turn 2."""
+    with _PREWARM_BUILDER_SEMAPHORE:
+        if slot.generation != _PREWARM_GENERATION:
+            slot.is_building = False
+            slot.persona_ready.set()
+            slot.turn2_ready.set()
+            return
+
+        t0 = time.time()
+        try:
+            # 1. Ensure OKF dynamic context cache is warm
+            fetch_okf_dynamic_context()
+
+            # 2. Generate live customer persona (Turn 1) if not already set
+            if slot.persona is None:
+                slot.persona = generate_customer_persona()
+
+            if slot.generation != _PREWARM_GENERATION:
+                return
+
+            _register_order_for_persona(slot.persona)
+            cust_id = slot.persona.get("customer_id") or random.randint(100000, 999999)
+            slot.adk_user_id = f"cust_{cust_id}"
+            slot.adk_session_id = _create_adk_session(slot.adk_user_id)
+            slot.persona_ready.set()
+            t_persona = time.time()
+            logger.info(
+                f"[Prewarm Pool] Slot {slot.slot_id} Turn 1 & ADK session ready in {t_persona - t0:.2f}s "
+                f"({slot.persona.get('customer_name')} | {slot.persona.get('product')})"
+            )
+
+            # 3. Pre-warm Turn 2 (Customer Service Agent first reply)
+            if slot.generation != _PREWARM_GENERATION:
+                return
+
+            opening_text = slot.persona.get(
+                "opening", "Hello, I need assistance with an appliance I purchased."
+            )
+            srv_text, srv_tools = _execute_service_turn(
+                adk_session_id=slot.adk_session_id,
+                adk_user_id=slot.adk_user_id,
+                last_customer_text=opening_text,
+                persona=slot.persona,
+                history=[{"role": "customer", "content": opening_text}],
+            )
+            slot.turn2_text = srv_text
+            slot.turn2_tools = srv_tools
+            slot.turn2_ready.set()
+            logger.info(
+                f"[Prewarm Pool] Slot {slot.slot_id} fully pre-warmed (Turn 1 + Turn 2) in {time.time() - t0:.2f}s "
+                f"(tools={srv_tools})"
+            )
+        except Exception as e:
+            logger.warning(f"[Prewarm Pool] Error populating slot {slot.slot_id}: {e}")
+            if slot.persona is None:
+                slot.persona = _procedural_fallback_persona()
+                _register_order_for_persona(slot.persona)
+            slot.persona_ready.set()
+            slot.turn2_ready.set()
+        finally:
+            slot.is_building = False
+
+
+def ensure_prewarm_pool(target_size: int = PREWARM_POOL_TARGET) -> None:
+    """Ensures up to `target_size` pre-warmed dialog slots are ready or being built in the background."""
+    with _PREWARM_LOCK:
+        # Remove any stale slots from an older generation
+        valid_slots = [s for s in PREWARM_POOL if s.generation == _PREWARM_GENERATION]
+        PREWARM_POOL.clear()
+        PREWARM_POOL.extend(valid_slots)
+
+        needed = max(0, target_size - len(PREWARM_POOL))
+        for _ in range(needed):
+            slot_id = f"pw-{int(time.time() * 1000)}-{random.randint(100, 999)}"
+            slot = PrewarmedDialogSlot(slot_id=slot_id, generation=_PREWARM_GENERATION)
+            PREWARM_POOL.append(slot)
+            threading.Thread(
+                target=_populate_prewarm_slot,
+                args=(slot,),
+                daemon=True,
+                name=f"PrewarmSlotWorker-{slot_id}",
+            ).start()
+
+
+def invalidate_prewarm_pool() -> None:
+    """Invalidates all existing pre-warmed slots (e.g., after Auditor updates OKF rules) and rebuilds the pool."""
+    global _PREWARM_GENERATION
+    with _PREWARM_LOCK:
+        _PREWARM_GENERATION += 1
+        PREWARM_POOL.clear()
+    logger.info(f"[Prewarm Pool] Invalidated pool (generation={_PREWARM_GENERATION}) and triggering fresh pre-warm.")
+    ensure_prewarm_pool(PREWARM_POOL_TARGET)
+
+
+def get_prewarm_pool_status() -> Dict[str, Any]:
+    """Returns current pre-warm pool readiness status."""
+    with _PREWARM_LOCK:
+        valid = [s for s in PREWARM_POOL if s.generation == _PREWARM_GENERATION]
+        turn2_ready_count = sum(1 for s in valid if s.turn2_ready.is_set())
+        persona_ready_count = sum(1 for s in valid if s.persona_ready.is_set())
+        total_slots = len(valid)
+    return {
+        "target_size": PREWARM_POOL_TARGET,
+        "total_slots": total_slots,
+        "persona_ready_slots": persona_ready_count,
+        "fully_warmed_slots": turn2_ready_count,
+        "generation": _PREWARM_GENERATION,
+        "ready": turn2_ready_count > 0 or persona_ready_count > 0,
+    }
+
+
+def acquire_prewarmed_slot() -> PrewarmedDialogSlot:
+    """Pops the best available pre-warmed dialog slot and immediately triggers background replenishment."""
+    chosen: Optional[PrewarmedDialogSlot] = None
+
+    with _PREWARM_LOCK:
+        valid = [s for s in PREWARM_POOL if s.generation == _PREWARM_GENERATION]
+        PREWARM_POOL.clear()
+        PREWARM_POOL.extend(valid)
+
+        # 1. Prefer a slot where both Turn 1 and Turn 2 are completely ready
+        for idx, s in enumerate(PREWARM_POOL):
+            if s.turn2_ready.is_set() and s.persona is not None:
+                chosen = PREWARM_POOL.pop(idx)
+                break
+
+        # 2. Otherwise prefer a slot where Persona (Turn 1) is ready and Turn 2 is in-flight
+        if chosen is None:
+            for idx, s in enumerate(PREWARM_POOL):
+                if s.persona_ready.is_set() and s.persona is not None:
+                    chosen = PREWARM_POOL.pop(idx)
+                    break
+
+        # 3. Otherwise take an in-flight slot currently generating its persona
+        if chosen is None and PREWARM_POOL:
+            chosen = PREWARM_POOL.pop(0)
+
+    # Immediately replenish the pool in the background
+    ensure_prewarm_pool(PREWARM_POOL_TARGET)
+
+    # Wait briefly if the chosen slot is still finishing its persona
+    if chosen is not None and not chosen.persona_ready.is_set():
+        chosen.persona_ready.wait(timeout=1.2)
+
+    # If no slot had a persona ready within 1.2s (e.g., instant cold start), synthesize immediately
+    if chosen is None or chosen.persona is None:
+        slot_id = f"pw-fast-{int(time.time() * 1000)}"
+        fast_slot = PrewarmedDialogSlot(slot_id=slot_id, generation=_PREWARM_GENERATION)
+        fast_slot.persona = _procedural_fallback_persona()
+        _register_order_for_persona(fast_slot.persona)
+        cust_id = fast_slot.persona.get("customer_id") or random.randint(100000, 999999)
+        fast_slot.adk_user_id = f"cust_{cust_id}"
+        fast_slot.adk_session_id = _create_adk_session(fast_slot.adk_user_id)
+        fast_slot.persona_ready.set()
+
+        def _warm_fast_turn2():
+            try:
+                opening_text = fast_slot.persona.get(
+                    "opening", "Hello, I need assistance with an appliance I purchased."
+                )
+                srv_text, srv_tools = _execute_service_turn(
+                    adk_session_id=fast_slot.adk_session_id,
+                    adk_user_id=fast_slot.adk_user_id,
+                    last_customer_text=opening_text,
+                    persona=fast_slot.persona,
+                    history=[{"role": "customer", "content": opening_text}],
+                )
+                fast_slot.turn2_text = srv_text
+                fast_slot.turn2_tools = srv_tools
+            finally:
+                fast_slot.is_building = False
+                fast_slot.turn2_ready.set()
+
+        threading.Thread(target=_warm_fast_turn2, daemon=True).start()
+        return fast_slot
+
+    return chosen
 
 
 # =====================================================================
@@ -666,10 +1117,17 @@ SESSIONS: Dict[str, "SimulationSession"] = {}
 class SimulationSession:
     """Manages state, background execution, and dual SSE/polling streaming for a conversation."""
 
-    def __init__(self, session_id: str, persona: Dict[str, Any], pacing: str = "human"):
+    def __init__(
+        self,
+        session_id: str,
+        persona: Dict[str, Any],
+        pacing: str = "human",
+        prewarm_slot: Optional[PrewarmedDialogSlot] = None,
+    ):
         self.session_id = session_id
         self.persona = persona
         self.pacing = pacing if pacing in ("human", "relaxed", "fast", "turbo") else "human"
+        self.prewarm_slot = prewarm_slot
         self.events_queue: queue.Queue = queue.Queue()
         self.events_history: List[Dict[str, Any]] = []
         self.stop_requested = threading.Event()
@@ -708,7 +1166,7 @@ class SimulationSession:
         while time.time() < end:
             if self.stop_requested.is_set():
                 return True
-            time.sleep(0.05 if duration < 0.5 else 0.2)
+            time.sleep(0.05 if duration < 0.5 else 0.15)
         return self.stop_requested.is_set()
 
     def _get_turn_delay(self, role: str, text: str = "") -> float:
@@ -762,92 +1220,11 @@ class SimulationSession:
 
     def _sanitize_human_service_text(self, text: str) -> str:
         """Sanitizes service text to ensure human-like brevity, no markdown bolding, and no long dashes."""
-        if not text:
-            return ""
-        # Remove markdown bolding and asterisks
-        cleaned = text.replace("**", "").replace("*", "")
-        # Remove long dashes (em-dash, en-dash, double dash)
-        cleaned = re.sub(r'[\u2014\u2013]|--', ', ', cleaned)
-        # Strip any leading role prefixes like "Apex Support AI:" or "Agent:"
-        cleaned = re.sub(r'^(Apex Support AI|Apex Support|Support|Agent):\s*', '', cleaned, flags=re.IGNORECASE)
-        cleaned = cleaned.strip('"').strip()
-
-        # Cap to maximum 3 sentences
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', cleaned) if s.strip()]
-        if len(sentences) > 3:
-            cleaned = " ".join(sentences[:3]).strip()
-        return cleaned
+        return _sanitize_human_service_text_static(text)
 
     def _generate_dynamic_service_turn(self, last_customer_text: str) -> Tuple[str, List[str]]:
         """Generates a dynamic, in-character customer service turn using Gemini 3.8 Flash."""
-        ensure_gemini_api_key(PROJECT_ID)
-        prod = self.persona.get("product", "item")
-        cust_name = self.persona.get("customer_name", "Customer")
-        order_id = self.persona.get("order_id", "ORD-1001")
-        category = self.persona.get("category", "General Inquiry")
-
-        history_lines = []
-        for t in self.history[-8:]:
-            role = "Customer" if t.get("role") == "customer" else "Apex Support AI"
-            history_lines.append(f"{role}: {t.get('content', '')}")
-        hist_block = "\n".join(history_lines)
-
-        okf_context = fetch_okf_dynamic_context().strip()
-        okf_prompt_addition = f"\nActive Dynamic OKF Rules:\n{okf_context}\n" if okf_context else ""
-
-        prompt = f"""You are a human customer service representative working live support chat for ApexHome & Electro.
-Customer: {cust_name}
-Order ID: {order_id}
-Product: {prod}
-Category: {category}
-{okf_prompt_addition}
-Conversation History:
-{hist_block}
-
-Customer just said:
-"{last_customer_text}"
-
-Strict Guidelines:
-- Speak like an authentic human support representative on live chat.
-- LENGTH LIMIT: Strictly maximum 2 to 3 sentences per response. Never write more than 3 sentences.
-- NO MARKDOWN BOLDING: Absolutely never use '**' for bold text. Write plain text only.
-- NO LONG DASHES: Never use long dashes (em-dash, en-dash, or double hyphens '--'). Use commas or standard periods.
-- Tone & Demeanor: Do not always give the most great, helpful, or overly polite answers. Avoid robotic corporate pleasantries or endless apologies. Real support agents can be blunt, dry, tired, skeptical, or firm.
-- Realistic Conflict: You can get into slight conflict with the customer. Stand firm on store policies (30-day returns, 15% open-box restocking fee, remote diagnostics first, 48-hour carrier traces) and push back if the customer is demanding, unreasonable, or refuses testing.
-
-Respond directly as support:
-"""
-        tools_used = ["search_product_catalog"]
-        lower_input = last_customer_text.lower()
-        if "order" in lower_input or "tracking" in lower_input or "deliver" in lower_input or "ship" in lower_input:
-            tools_used = ["check_order_status"]
-        elif "warranty" in lower_input or "repair" in lower_input or "technician" in lower_input:
-            tools_used = ["lookup_warranty_policy"]
-        elif "return" in lower_input or "refund" in lower_input or "rma" in lower_input or "exchange" in lower_input:
-            tools_used = ["initiate_return"]
-        elif "charge" in lower_input or "fee" in lower_input or "card" in lower_input or "bill" in lower_input or "bank" in lower_input:
-            tools_used = ["lookup_billing_and_refund_status"]
-
-        try:
-            from google import genai
-            from google.genai import types
-
-            client = genai.Client()
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.85),
-            )
-            text = response.text.strip()
-            text = re.sub(r'^(Apex Support AI|Apex Support|Support|Agent):\s*', '', text, flags=re.IGNORECASE)
-            return self._sanitize_human_service_text(text), tools_used
-        except Exception as e:
-            logger.warning(f"Dynamic service turn fallback: {e}")
-            ticket_num = f"TC-{random.randint(10000, 99999)}"
-            return (
-                f"I noted your issue with the {prod} under reference {ticket_num}. We need you to check the power and error code before we can discuss an exchange or technician.",
-                tools_used,
-            )
+        return _generate_dynamic_service_turn_static(self.persona, self.history, last_customer_text)
 
     def _generate_contextual_customer_reply(self, service_text: str) -> str:
         """Contextual procedural fallback for customer turns."""
@@ -860,21 +1237,30 @@ Respond directly as support:
         else:
             return f"Thank you for the update on my {prod}. Please confirm what the next steps are so we can get this sorted out."
 
+    def _safe_generate_customer_turn(self, history_snapshot: List[Dict[str, str]], service_text: str) -> str:
+        """Generates a customer reply safely with fallback."""
+        reply = None
+        try:
+            reply = generate_customer_turn(history_snapshot, self.persona, service_text)
+        except Exception as turn_err:
+            logger.info(f"Live customer turn generation note: {turn_err}")
+        if not reply:
+            reply = self._generate_contextual_customer_reply(service_text)
+        return reply
+
     def _run_loop(self):
-        """Simulates an engaging, realistic multi-turn (6-8 turns) conversation with authentic human pacing."""
+        """Simulates an engaging, realistic multi-turn (6-8 turns) conversation with pre-warmed start & overlapped pacing."""
         cust_name = self.persona.get("customer_name") or self.persona.get("name", "Customer")
         cust_id = self.persona.get("customer_id") or random.randint(100000, 999999)
         logger.info(f"Starting simulation session {self.session_id} for {cust_name} (pacing: {self.pacing})")
 
-        adk_loop = None
         try:
-            # 1. Opening customer turn (Turn 1)
+            # 1. Opening customer turn (Turn 1) - Pre-warmed & emitted almost immediately (~0.3s)
             turn_counter = 1
             opening_text = self.persona.get(
                 "opening", "Hello, I need assistance with an appliance I purchased."
             )
 
-            # Realistic human typing pause before opening message (omitted in turbo)
             opening_status = (
                 f"{cust_name} initiating inquiry..."
                 if self.pacing == "turbo"
@@ -893,9 +1279,9 @@ Respond directly as support:
             if self.pacing == "turbo":
                 opening_delay = 0.0
             elif self.pacing == "fast":
-                opening_delay = 0.5
+                opening_delay = 0.15
             else:
-                opening_delay = random.uniform(1.8, 2.6)
+                opening_delay = 0.3
             if self._sleep_interruptible(opening_delay):
                 return
 
@@ -911,35 +1297,29 @@ Respond directly as support:
             )
             last_customer_text = opening_text
 
-            # Initialize ADK InMemoryRunner session for live agent execution and BigQuery telemetry
-            adk_runner = None
-            adk_session_id = None
-            adk_user_id = f"cust_{cust_id}"
-            if customer_service_app:
-                try:
-                    from google.adk.runners import InMemoryRunner
+            # Resolve ADK session ID from prewarm slot or create one on persistent runner
+            adk_user_id = (
+                self.prewarm_slot.adk_user_id
+                if self.prewarm_slot and self.prewarm_slot.adk_user_id
+                else f"cust_{cust_id}"
+            )
+            adk_session_id = (
+                self.prewarm_slot.adk_session_id
+                if self.prewarm_slot and self.prewarm_slot.adk_session_id
+                else _create_adk_session(adk_user_id)
+            )
 
-                    adk_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(adk_loop)
-                    adk_runner = InMemoryRunner(app=customer_service_app)
-                    adk_session = adk_loop.run_until_complete(
-                        adk_runner.session_service.create_session(
-                            app_name=customer_service_app.name, user_id=adk_user_id
-                        )
-                    )
-                    adk_session_id = adk_session.id
-                    logger.info(f"ADK runner session initialized for {cust_name}: {adk_session_id}")
-                except Exception as init_err:
-                    logger.warning(f"ADK runner session init fallback: {init_err}")
+            # Futures for overlapping Turn N+1 generation while Turn N is typing/displayed
+            prefetched_customer_future: Optional[Future] = None
+            prefetched_service_future: Optional[Future] = None
 
             # Dynamic live conversation turns (targeting 6 to 8 turns total)
             max_turns = 8
             while turn_counter < max_turns and not self.stop_requested.is_set():
                 # --- CUSTOMER SERVICE TURN ---
-                live_text = ""
-                live_tools = []
+                is_first_service_turn = (turn_counter == 1)
+                t_srv_start = time.time()
 
-                # Initial typing indicator for service
                 initial_srv_status = (
                     "Apex Support AI processing request..."
                     if self.pacing == "turbo"
@@ -956,40 +1336,35 @@ Respond directly as support:
                     },
                 )
 
-                if adk_runner and adk_session_id and adk_loop and last_customer_text:
-                    try:
-                        async def _run_agent_turn():
-                            nonlocal live_text, live_tools
-                            from google.genai.types import Content, Part
-                            c_content = Content(role="user", parts=[Part.from_text(text=last_customer_text)])
-                            async for evt in adk_runner.run_async(
-                                session_id=adk_session_id, user_id=adk_user_id, new_message=c_content
-                            ):
-                                if evt.content and evt.content.parts:
-                                    for p in evt.content.parts:
-                                        if p.text:
-                                            live_text += p.text
-                                        if p.function_call:
-                                            live_tools.append(p.function_call.name)
-                            if customer_service_telemetry_plugin:
-                                try:
-                                    await customer_service_telemetry_plugin.flush()
-                                except Exception:
-                                    pass
+                service_text = ""
+                tools: List[str] = []
 
-                        adk_loop.run_until_complete(asyncio.wait_for(_run_agent_turn(), timeout=35.0))
-                    except Exception as live_err:
-                        logger.info(f"ADK customer service turn execution note: {live_err}")
+                if is_first_service_turn and self.prewarm_slot is not None:
+                    # Wait for pre-warmed Turn 2 (returns immediately in 0.0s if already warm!)
+                    self.prewarm_slot.turn2_ready.wait(timeout=35.0)
+                    if self.prewarm_slot.turn2_text:
+                        service_text = self.prewarm_slot.turn2_text
+                        tools = list(self.prewarm_slot.turn2_tools or ["search_product_catalog"])
 
-                # If ADK runner returned empty or timed out, generate dynamic response via model
-                if not live_text.strip():
-                    live_text, fb_tools = self._generate_dynamic_service_turn(last_customer_text)
-                    if not live_tools:
-                        live_tools = fb_tools
+                if not service_text:
+                    if prefetched_service_future is not None:
+                        try:
+                            service_text, tools = prefetched_service_future.result(timeout=35.0)
+                        except Exception as pf_err:
+                            logger.info(f"Prefetched service turn fallback: {pf_err}")
+                        finally:
+                            prefetched_service_future = None
 
-                service_text = self._sanitize_human_service_text(live_text)
-                tools = live_tools or ["search_product_catalog"]
-                srv_delay = self._get_turn_delay("service", service_text)
+                if not service_text:
+                    service_text, tools = _execute_service_turn(
+                        adk_session_id=adk_session_id,
+                        adk_user_id=adk_user_id,
+                        last_customer_text=last_customer_text,
+                        persona=self.persona,
+                        history=list(self.history),
+                    )
+
+                llm_elapsed = time.time() - t_srv_start
 
                 # Show tool usage in typing indicator
                 tool_desc = ", ".join(t.replace("_", " ") for t in tools)
@@ -1009,7 +1384,26 @@ Respond directly as support:
                     },
                 )
 
-                if self._sleep_interruptible(srv_delay):
+                # Calculate remaining typing delay (brief ~1.2-1.8s on pre-warmed Turn 2; subtract LLM time on Turn 4+)
+                if self.pacing == "turbo":
+                    rem_srv_delay = 0.0
+                elif is_first_service_turn:
+                    target_first_srv = 0.6 if self.pacing == "fast" else random.uniform(1.2, 1.8)
+                    rem_srv_delay = max(0.0, target_first_srv - llm_elapsed)
+                else:
+                    target_srv_delay = self._get_turn_delay("service", service_text)
+                    rem_srv_delay = max(0.4, target_srv_delay - llm_elapsed)
+
+                # Overlap: start generating the next Customer turn in the background while Service is typing!
+                next_history_after_srv = list(self.history) + [{"role": "service", "content": service_text}]
+                if (turn_counter + 1) < max_turns and not self.stop_requested.is_set():
+                    prefetched_customer_future = _TURN_EXECUTOR.submit(
+                        self._safe_generate_customer_turn,
+                        next_history_after_srv,
+                        service_text,
+                    )
+
+                if self._sleep_interruptible(rem_srv_delay):
                     break
 
                 turn_counter += 1
@@ -1027,7 +1421,6 @@ Respond directly as support:
                 # Check if resolution was reached and we have conducted at least 5 turns
                 is_resolved = self._is_resolution_reached(service_text)
                 if is_resolved and turn_counter >= 5:
-                    # Let the customer give a natural final acknowledgement
                     cust_closing_status = (
                         f"{cust_name} concluding inquiry..."
                         if self.pacing == "turbo"
@@ -1043,11 +1436,23 @@ Respond directly as support:
                             "timestamp": time.time(),
                         },
                     )
-                    cust_delay = self._get_turn_delay("customer", "Thank you, that resolves my issue.")
-                    if self._sleep_interruptible(cust_delay):
+                    t_close_start = time.time()
+                    if prefetched_customer_future is not None:
+                        try:
+                            customer_closing = prefetched_customer_future.result(timeout=15.0)
+                        except Exception:
+                            customer_closing = self._safe_generate_customer_turn(list(self.history), service_text)
+                        finally:
+                            prefetched_customer_future = None
+                    else:
+                        customer_closing = self._safe_generate_customer_turn(list(self.history), service_text)
+
+                    close_elapsed = time.time() - t_close_start
+                    target_close_delay = self._get_turn_delay("customer", customer_closing or "Thank you.")
+                    rem_close_delay = 0.0 if self.pacing == "turbo" else max(0.3, target_close_delay - close_elapsed)
+                    if self._sleep_interruptible(rem_close_delay):
                         break
 
-                    customer_closing = generate_customer_turn(self.history, self.persona, service_text)
                     if customer_closing:
                         turn_counter += 1
                         self.history.append({"role": "customer", "content": customer_closing})
@@ -1063,6 +1468,7 @@ Respond directly as support:
                     break
 
                 # --- CUSTOMER TURN ---
+                t_cust_start = time.time()
                 cust_reply_status = (
                     f"{cust_name} generating response..."
                     if self.pacing == "turbo"
@@ -1080,16 +1486,35 @@ Respond directly as support:
                 )
 
                 customer_reply = None
-                try:
-                    customer_reply = generate_customer_turn(self.history, self.persona, service_text)
-                except Exception as turn_err:
-                    logger.info(f"Live customer turn generation note: {turn_err}")
+                if prefetched_customer_future is not None:
+                    try:
+                        customer_reply = prefetched_customer_future.result(timeout=20.0)
+                    except Exception as pf_cust_err:
+                        logger.info(f"Prefetched customer turn fallback: {pf_cust_err}")
+                    finally:
+                        prefetched_customer_future = None
 
                 if not customer_reply:
-                    customer_reply = self._generate_contextual_customer_reply(service_text)
+                    customer_reply = self._safe_generate_customer_turn(list(self.history), service_text)
 
-                cust_delay = self._get_turn_delay("customer", customer_reply)
-                if self._sleep_interruptible(cust_delay):
+                cust_llm_elapsed = time.time() - t_cust_start
+                target_cust_delay = self._get_turn_delay("customer", customer_reply)
+                rem_cust_delay = 0.0 if self.pacing == "turbo" else max(0.4, target_cust_delay - cust_llm_elapsed)
+
+                # Overlap: if conversation will continue after this customer turn, start computing next Service turn now!
+                will_close = self._is_customer_closing(customer_reply) and (turn_counter + 1) >= 5
+                if not will_close and (turn_counter + 1) < max_turns and not self.stop_requested.is_set():
+                    next_history_after_cust = list(self.history) + [{"role": "customer", "content": customer_reply}]
+                    prefetched_service_future = _TURN_EXECUTOR.submit(
+                        _execute_service_turn,
+                        adk_session_id,
+                        adk_user_id,
+                        customer_reply,
+                        self.persona,
+                        next_history_after_cust,
+                    )
+
+                if self._sleep_interruptible(rem_cust_delay):
                     break
 
                 turn_counter += 1
@@ -1106,10 +1531,10 @@ Respond directly as support:
                 )
 
                 # If customer expressed a closing statement and we've reached sufficient depth
-                if self._is_customer_closing(customer_reply) and turn_counter >= 5:
+                if will_close:
                     break
 
-            # Brief pause before rating evaluation (skipped in turbo)
+            # Overlap rating evaluation with the final evaluation pause
             if self.pacing == "turbo":
                 eval_delay = 0.0
                 eval_status = f"{cust_name} evaluating satisfaction score..."
@@ -1117,7 +1542,7 @@ Respond directly as support:
                 eval_delay = 1.0
                 eval_status = f"{cust_name} is evaluating interaction satisfaction..."
             else:
-                eval_delay = random.uniform(2.5, 3.5)
+                eval_delay = random.uniform(2.0, 3.0)
                 eval_status = f"{cust_name} is evaluating interaction satisfaction..."
             self.emit(
                 "typing",
@@ -1129,10 +1554,12 @@ Respond directly as support:
                     "timestamp": time.time(),
                 },
             )
-            self._sleep_interruptible(eval_delay)
-
-            # Post-conversation evaluation & BigQuery rating persistence
+            t_eval_start = time.time()
             rating, description = self._evaluate_session()
+            eval_elapsed = time.time() - t_eval_start
+            rem_eval_delay = max(0.0, eval_delay - eval_elapsed)
+            self._sleep_interruptible(rem_eval_delay)
+
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
                 write_customer_rating_to_bigquery(
@@ -1185,21 +1612,6 @@ Respond directly as support:
             self.emit("complete", {"status": "SUCCESS"})
 
         finally:
-            if adk_loop and not adk_loop.is_closed():
-                try:
-                    if customer_service_telemetry_plugin:
-                        try:
-                            adk_loop.run_until_complete(customer_service_telemetry_plugin.flush())
-                        except Exception:
-                            pass
-                    pending = [t for t in asyncio.all_tasks(adk_loop) if not t.done()]
-                    for t in pending:
-                        t.cancel()
-                    if pending:
-                        adk_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                    adk_loop.close()
-                except Exception:
-                    pass
             self.is_finished = True
 
     def _evaluate_session(self) -> Tuple[int, str]:
@@ -1245,7 +1657,8 @@ Respond directly as support:
 
 @app.route("/")
 def index():
-    """Serves the two-tab web dashboard."""
+    """Serves the web dashboard and ensures pre-warmed conversation pool is topped up."""
+    ensure_prewarm_pool(PREWARM_POOL_TARGET)
     return render_template("index.html")
 
 
@@ -1266,6 +1679,17 @@ def health():
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "active_sessions": len(SESSIONS),
+        "prewarm_pool": get_prewarm_pool_status(),
+    })
+
+
+@app.route("/api/conversation/prewarm", methods=["GET", "POST"])
+def prewarm_conversation_endpoint():
+    """Triggers or inspects the background conversation pre-warming pool."""
+    ensure_prewarm_pool(PREWARM_POOL_TARGET)
+    return jsonify({
+        "status": "OK",
+        "pool": get_prewarm_pool_status(),
     })
 
 
@@ -1322,42 +1746,37 @@ def get_customer_service_agent_instructions():
 
 @app.route("/api/conversation/start", methods=["POST"])
 def start_conversation():
-    """Initiates a new customer support simulation session."""
+    """Initiates a new customer support simulation session using a pre-warmed dialog slot."""
     data = request.get_json(silent=True) or {}
     pacing = data.get("pacing", "human")
     if pacing not in ("human", "relaxed", "fast", "turbo"):
         pacing = "human"
 
     session_id = f"sim-{int(time.time())}-{random.randint(1000, 9999)}"
-    persona = generate_customer_persona()
+    slot = acquire_prewarmed_slot()
+    persona = slot.persona
+    was_turn2_prewarmed = slot.turn2_ready.is_set()
 
-    # Register dynamic order with customer service tools so lookup tools find it
-    try:
-        register_customer_order({
-            "order_id": persona.get("order_id"),
-            "customer_name": persona.get("customer_name"),
-            "product_name": persona.get("product"),
-            "status": "Delivered" if "Return" in persona.get("category", "") or "Hardware" in persona.get("category", "") else "In Transit",
-            "carrier": "FedEx Freight Priority" if "freight" in persona.get("product", "").lower() or "tv" in persona.get("product", "").lower() else "UPS Expedited",
-            "tracking_number": f"TRK-{abs(hash(persona.get('order_id', '1000'))) % 89999999 + 10000000}",
-            "delivery_date": "Recently Delivered" if "Hardware" in persona.get("category", "") else "Expected Tomorrow by 2:00 PM",
-            "total_amount": f"${random.randint(399, 2899)}.00",
-            "issue_category": persona.get("category"),
-            "issue_notes": persona.get("issue"),
-        })
-    except Exception as reg_err:
-        logger.info(f"Dynamic order registration note: {reg_err}")
-
-    session = SimulationSession(session_id, persona, pacing=pacing)
+    session = SimulationSession(
+        session_id=session_id,
+        persona=persona,
+        pacing=pacing,
+        prewarm_slot=slot,
+    )
     SESSIONS[session_id] = session
     session.start()
 
-    logger.info(f"Initiated new conversation session: {session_id} (pacing={pacing})")
+    logger.info(
+        f"Initiated new conversation session: {session_id} "
+        f"(pacing={pacing}, slot={slot.slot_id}, turn2_prewarmed={was_turn2_prewarmed})"
+    )
     return jsonify({
         "status": "STARTED",
         "session_id": session_id,
         "persona": persona,
         "pacing": pacing,
+        "prewarmed": True,
+        "turn2_prewarmed": was_turn2_prewarmed,
     })
 
 
@@ -1447,7 +1866,7 @@ def stop_conversation(session_id: str):
 
 @app.route("/api/auditor/run", methods=["POST"])
 def run_auditor():
-    """Executes the Auditor Agent multi-agent pipeline."""
+    """Executes the Auditor Agent multi-agent pipeline and refreshes OKF + pre-warmed conversation pool."""
     try:
         global LATEST_AUDIT_REPORT, LATEST_AUDITOR_QUERIES
         report = run_audit_pipeline()
@@ -1457,6 +1876,16 @@ def run_auditor():
             report["queries"] = queries
         LATEST_AUDIT_REPORT = report
         LATEST_AUDITOR_QUERIES = queries
+
+        # Refresh OKF cache and invalidate pre-warmed dialogs so next conversation uses updated rules
+        def _refresh_after_audit():
+            try:
+                invalidate_okf_cache(refresh_immediately=True)
+            except Exception as okf_err:
+                logger.warning(f"OKF cache refresh note after audit: {okf_err}")
+            invalidate_prewarm_pool()
+
+        threading.Thread(target=_refresh_after_audit, daemon=True, name="PostAuditPrewarmRefresh").start()
         return jsonify(report)
     except Exception as e:
         logger.error(f"Error executing auditor pipeline: {e}")
@@ -1755,7 +2184,13 @@ def query_analytics_charts_data() -> Dict[str, Any]:
 
 
 def prewarm_tab_caches():
-    """Warms Tab 2 (Analytics) and Tab 3 (Customer Analysis) caches in background daemon thread on startup."""
+    """Warms Tab 1 dialog pool, Tab 2 (Analytics), and Tab 3 (Customer Analysis) caches in background daemon thread on startup."""
+    # Immediately trigger the 2-slot conversation pre-warm pool in the background
+    try:
+        ensure_prewarm_pool(PREWARM_POOL_TARGET)
+    except Exception as e:
+        logger.warning(f"[Startup Warmup] Error starting dialog prewarm pool: {e}")
+
     def _worker():
         global ANALYTICS_SUMMARY_CACHE, ANALYTICS_CHARTS_CACHE, CUSTOMER_ANALYSIS_CACHE
         logger.info("[Startup Warmup] Pre-warming background caches for Tab 2 & Tab 3...")

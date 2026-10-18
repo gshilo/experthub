@@ -25,12 +25,15 @@ Content-Type: `text/event-stream`
 * `event: complete`: Emitted when the session is finalized and persisted.
 * `event: aborted`: Emitted when the user manually terminates the dialogue early.
 
+### Endpoint: `POST /api/conversation/prewarm`
+Triggers and reports status of the 2-slot background dialog pre-warming pool (`PREWARM_POOL_TARGET = 2`). Each pre-warmed slot prepares a live Customer Persona (Turn 1), dynamic order registration, ADK `InMemoryRunner` session on a shared persistent event loop, OKF dynamic context, and the first Customer Service reply (Turn 2). Consuming a slot via `POST /api/conversation/start` immediately triggers background replenishment, and `POST /api/auditor/run` invalidates and rebuilds the pool with the updated OKF rules.
+
 ---
 
 ## 3. UI Workflows & User Actions
 
 ### Tab 1: Live Conversation & Auditor Workspace
-* **Start conversation:** Launches a background simulation thread, assigns a random customer persona, and streams alternating turns with realistic human pacing (~5–7s/turn default, or selectable relaxed ~7–10s / fast ~2s). Displays animated typing indicators while agents formulate replies.
+* **Start conversation:** Pops a pre-warmed dialog slot (`< 50ms` response time), renders the customer's opening message (Turn 1) in `~0.3s` and the pre-warmed Customer Service reply (Turn 2) in `~1.5s`, and streams Turn 3+ live while overlapping LLM generation with the current turn's typing animation. Displays animated typing indicators while agents formulate replies.
 * **End conversation:** Triggers immediate graceful abortion, prompting the customer agent to evaluate the interaction up to that point and persist its rating to BigQuery `demo.customer_ratings`.
 * **Show instructions:** Queries `/api/agent/instructions` to retrieve the Customer Service Agent's full system prompt—including dynamic OKF rules loaded from `dynamic_context.md` on GitHub and behavioral style constraints—and renders them in an interactive modal with copy functionality and status badges, as well as an inline viewer.
 * **Run Auditor Agent:** Calls the Auditor pipeline on demand, displays detected policy/latency issues, token optimization metrics, and synchronizes rules with GitHub: creates `dynamic_context.md` on `main` if missing, or makes additive changes on `new_version` branch awaiting human review before merge into `main`. Displays target branch badge and pending human review pill.
@@ -77,7 +80,7 @@ These library standards provide comprehensive Cloud Logging capture, OpenTelemet
 
 ## 6. Cloud Run Deployment & Service Configuration
 * **Service Name:** `experthub-frontend`
-* **Active Revision:** `experthub-frontend-00018-v9x`
+* **Active Revision:** `experthub-frontend-00027-jqx`
 * **Live Service URL:** [https://experthub-frontend-537563976049.us-central1.run.app](https://experthub-frontend-537563976049.us-central1.run.app)
 * **Associated Agent Engine IDs:**
   * `CUSTOMER_SERVICE_AGENT_ID`: `2556039354015285248`
