@@ -2792,14 +2792,18 @@
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-      
+
       let html = escaped
-        .replace(/^### (.*$)/gim, '<div class="advisory-section-title">$1</div>')
-        .replace(/^## (.*$)/gim, '<div class="advisory-section-title" style="font-size: 1.05rem;">$1</div>')
+        .replace(/^####\s+(.*$)/gim, '<div class="advisory-section-title" style="font-size: 0.9rem; color: #cbd5e1;">$1</div>')
+        .replace(/^###\s+(.*$)/gim, '<div class="advisory-section-title">$1</div>')
+        .replace(/^##\s+(.*$)/gim, '<div class="advisory-section-title" style="font-size: 1.05rem;">$1</div>')
+        .replace(/^#\s+(.*$)/gim, '<div class="advisory-section-title" style="font-size: 1.1rem;">$1</div>')
+        .replace(/^[ \t]{2,}[-*•]\s+(.*$)/gim, '<div class="advisory-list-item bullet" style="margin-left: 1.25rem;"><span class="item-bullet">◦</span><span>$1</span></div>')
+        .replace(/^[-*•]\s+(.*$)/gim, '<div class="advisory-list-item bullet"><span class="item-bullet">●</span><span>$1</span></div>')
+        .replace(/^[ \t]*(\d+)\.\s+(.*$)/gim, '<div class="advisory-list-item numbered"><span class="item-num">$1.</span><span>$2</span></div>')
+        .replace(/`([^`]+)`/gim, '<code style="background: rgba(51, 65, 85, 0.6); color: #93c5fd; padding: 0.1rem 0.35rem; border-radius: 4px; font-family: \'JetBrains Mono\', monospace; font-size: 0.82em;">$1</code>')
         .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
-        .replace(/\*(.*?)\*/gim, '<em>$1</em>')
-        .replace(/^(\d+)\.\s+(.*$)/gim, '<div class="advisory-list-item numbered"><span class="item-num">$1.</span><span>$2</span></div>')
-        .replace(/^-\s+(.*$)/gim, '<div class="advisory-list-item bullet"><span class="item-bullet">●</span><span>$1</span></div>')
+        .replace(/\*([^\*\n]+)\*/gim, '<em>$1</em>')
         .replace(/\n\n/g, '<div style="margin: 0.6rem 0;"></div>');
       return html;
     }
