@@ -63,14 +63,14 @@ flowchart TD
      * Clicking it invokes `/api/agent/instructions`, which queries the Customer Service Agent (`customer_service_agent.agent.get_instructions()`) to fetch its full system prompt.
      * The retrieved instructions include base operational policies from `AGENT.md`, active dynamic directives loaded from the Open Knowledge Format (`dynamic_context.md`) on GitHub, and strict response style mandates.
      * Instructions are presented in an accessible modal dialog with copy functionality and dynamic OKF status indicators, as well as an inline viewer.
-   * **Human-Like Customer Service Communication:**
+   * **Human-Like Customer Service Communication (Baseline Friction vs. Post-Audit Improvement):**
      * **Strict Sentence Limit:** Customer service responses are strictly capped at maximum **2 to 3 sentences** per turn, mirroring concise live support chat messaging.
      * **Plain Text Only:** Zero markdown bolding (`**`) and zero long dashes (`—`, `–`, `--`).
-     * **Realistic Human Demeanor:** Replaced artificial corporate bot cheerfulness and excessive apologies with authentic human employee demeanor: pragmatic, direct, tired, blunt, or firm.
-     * **Realistic Conflict & Pushback:** The agent can get into slight conflict with the customer: standing firm on store policies (30-day return window, 15% open-box restocking fee, remote diagnostic triage before dispatch, 48-hour carrier trace) and pushing back when customers make unreasonable demands.
+     * **Initial Baseline Demeanor & Gatekeeping (Pre-Audit):** When no Dynamic OKF Directives are active, the agent behaves like a dry, strictly procedural support rep who withholds immediate tool-generated fee waivers or hassle-free approvals on early turns, insists on DIY troubleshooting first, enforces the 15% open-box restocking fee and 48-hour carrier trace waits, and offers only reluctant, string-attached resolutions after customer pushback.
+     * **Post-Audit Improvement (OKF Directives Active):** Once the Auditor Agent's corrective OKF rules are merged into `main`, they supersede baseline gatekeeping and friction, guiding the agent to proactively issue RMAs, waive restocking/freight fees on defects or exchanges, schedule technicians, and resolve issues smoothly.
    * The **Agent Analytics Plugin** automatically captures token counts, response latencies, tool calls, and error states into BigQuery dataset `agent_telemetry`.
 2. **Realistic Customer Feedback Persistence:**
-   * Upon dialogue conclusion, the Customer Agent realistically rates the interaction on a 1–5 scale (including genuine 2-star and 3-star reviews reflecting customer friction, restocking fees, and courier delays) and commits the rating, feedback description, and submission timestamp to BigQuery table `demo.customer_ratings`.
+   * Upon dialogue conclusion, the Customer Agent evaluates the conversation transcript itself on a 1–5 scale (naturally producing lower 2-star and 3-star ratings during baseline friction, and improving to 4-star and 5-star ratings after Auditor rules are active) and commits the rating, feedback description, and submission timestamp to BigQuery table `demo.customer_ratings`.
 3. **Auditor Multi-Agent Inspection:**
    * The user triggers **"Run Auditor Agent"**.
    * A 3-stage sequential multi-agent pipeline analyzes the actual customer ratings and telemetry in BigQuery:
