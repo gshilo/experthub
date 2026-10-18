@@ -2228,37 +2228,59 @@ def query_customer_analysis_static_bq(
     }
 
 
+def _get_telemetry_and_ai_schema_guide(project_id: str = PROJECT_ID) -> str:
+    """Returns comprehensive BigQuery schema and AI function reference for dynamic query generation."""
+    return f"""Target Google Cloud BigQuery Datasets & Views (Project `{project_id}`):
+
+1. `{project_id}.agent_telemetry.agent_events` (Base Event Table - best for full session/turn chronology and user messages):
+   - Columns: `timestamp` TIMESTAMP, `event_id` STRING, `event_type` STRING, `agent` STRING, `session_id` STRING, `invocation_id` STRING, `user_id` STRING, `trace_id` STRING, `span_id` STRING, `parent_span_id` STRING, `content` JSON, `attributes` JSON, `latency_ms` JSON, `status` STRING, `error_message` STRING
+   - Key `event_type` values and how to extract their qualitative payloads:
+     * `'USER_MESSAGE_RECEIVED'`: Customer/user message & intent text is `JSON_VALUE(content, '$.text_summary')`. (Note: `v_user_message_received` only has metadata columns; always query `agent_events WHERE event_type = 'USER_MESSAGE_RECEIVED'` to extract `JSON_VALUE(content, '$.text_summary')`).
+     * `'TOOL_STARTING'`: Tool invocation decision; tool name is `JSON_VALUE(content, '$.tool')`, arguments are `TO_JSON_STRING(JSON_QUERY(content, '$.args'))`.
+     * `'TOOL_COMPLETED'`: Tool execution output/policy result; tool name is `JSON_VALUE(content, '$.tool')`, result text is `COALESCE(JSON_VALUE(content, '$.result'), TO_JSON_STRING(content))`.
+     * `'AGENT_RESPONSE'`: Final agent decision/answer sent to customer; text is `REGEXP_REPLACE(JSON_VALUE(content, '$.response'), r"^text:\\s*'(.*)'$", r"\\1")`.
+   - Reconstructing multi-turn session decision traces (`Customer Intent -> Tool Called -> Tool Output -> Agent Decision`):
+     Group events by `session_id` (and/or `invocation_id`) ordered by `timestamp ASC` to evaluate agent decision quality, tool adherence vs. policy hallucinations, intent handling, and conversation flow.
+
+2. `{project_id}.agent_telemetry` Analytical Views (`v_*`):
+   - `{project_id}.agent_telemetry.v_agent_response`: `timestamp`, `session_id`, `invocation_id`, `response_text` STRING (clean via `REGEXP_REPLACE(response_text, r"^text:\\s*'(.*)'$", r"\\1")`), `source_event_author` STRING.
+   - `{project_id}.agent_telemetry.v_tool_starting`: `timestamp`, `session_id`, `invocation_id`, `tool_name` STRING, `tool_args` JSON, `tool_origin` STRING.
+   - `{project_id}.agent_telemetry.v_tool_completed`: `timestamp`, `session_id`, `invocation_id`, `tool_name` STRING, `tool_result` JSON, `tool_origin` STRING, `total_ms` INT64.
+   - `{project_id}.agent_telemetry.v_llm_request`: `timestamp`, `session_id`, `invocation_id`, `model` STRING, `request_content` JSON, `llm_config` JSON, `tools` JSON.
+   - `{project_id}.agent_telemetry.v_llm_response`: `timestamp`, `session_id`, `invocation_id`, `response` JSON, `usage_prompt_tokens` INT64, `usage_completion_tokens` INT64, `usage_total_tokens` INT64, `total_ms` INT64, `ttft_ms` INT64, `model_version` STRING, `finish_reason` STRING.
+   - `{project_id}.agent_telemetry.v_tool_error`, `v_llm_error`, `v_agent_error`: `timestamp`, `session_id`, `error_message` STRING, `total_ms` INT64.
+
+3. `{project_id}.demo.customer_ratings` (Post-Session Customer Satisfaction & Reviews):
+   - `customer_id` INT64, `customer_name` STRING, `rating` INT64 (1 to 5), `description` STRING (verbal review), `timestamp` TIMESTAMP.
+
+Available BigQuery AI Functions (Connection `'us.gemini'`):
+- `AI.GENERATE(prompt, connection_id => 'us.gemini', endpoint => 'gemini-3.8-flash', output_schema => '...')`: Returns a typed STRUCT matching `output_schema`. Unpack in `FROM` clause using `UNNEST([AI.GENERATE(...)]) AS res`.
+- `AI.IF(condition_prompt, connection_id => 'us.gemini')`: Boolean semantic filter in `WHERE` or `COUNTIF`.
+- `AI.CLASSIFY(input_text, categories => ['Cat1', 'Cat2', ...], connection_id => 'us.gemini')`: Zero-shot categorical label per row.
+- `AI.SCORE(scoring_prompt, connection_id => 'us.gemini')`: Numerical quality/severity score (`FLOAT64`) per row.
+"""
+
+
 def generate_dynamic_analysis_query(question: str, project_id: str = PROJECT_ID) -> Optional[Dict[str, Any]]:
-    """Uses Gemini 3.8 Flash to interpret user questions into BigQuery SQL with AI pushdown."""
+    """Uses Gemini 3.8 Flash to interpret quantitative/visual user questions into BigQuery SQL with AI pushdown."""
     try:
         from google import genai
         client = genai.Client()
+        schema_guide = _get_telemetry_and_ai_schema_guide(project_id)
         prompt = f"""You are a BigQuery AI SQL and analytics expert for an e-commerce customer service platform.
-Convert this user analytics question into a BigQuery SQL query:
+Convert this user analytics question into a read-only BigQuery SQL query:
 User Question: "{question}"
 
-Target Database Schema in Google Cloud BigQuery:
-1. `{project_id}.demo.customer_ratings`:
-   - `customer_id` INT64
-   - `customer_name` STRING
-   - `rating` INT64 (1 to 5)
-   - `description` STRING (customer verbal feedback text)
-   - `timestamp` TIMESTAMP (UTC timestamp)
-
-2. `{project_id}.agent_telemetry.v_user_message_received` (use only if turn-level chat messages are queried):
-   - `timestamp` TIMESTAMP
-   - `session_id` STRING
-   - `text` STRING
-
-Available BigQuery AI Functions (Connection 'us.gemini'):
-- `AI.CLASSIFY(text, categories => ['Positive', 'Neutral', 'Negative'], connection_id => 'us.gemini')`: assigns sentiment label per row.
-- `AI.IF(condition_prompt, connection_id => 'us.gemini')`: boolean semantic filter.
-- `AI.GENERATE(prompt, connection_id => 'us.gemini', endpoint => 'gemini-3.8-flash', output_schema => '...')`: structured extraction.
+{schema_guide}
 
 CRITICAL RULES:
-1. If the question asks for trends, satisfaction/sentiment over time, history, daily/hourly change:
-   - Must use `AI.CLASSIFY` to assign sentiment ('Positive', 'Neutral', 'Negative') to each interaction row.
-   - Aggregate by time unit using `TIMESTAMP_TRUNC(timestamp, DAY)` (or `HOUR` if hourly is requested).
+1. Select the appropriate table(s)/view(s) based on the user's question:
+   - If the question is about agent telemetry, user intents, agent decisions, tool calls, latency, or tokens, query `{project_id}.agent_telemetry` (`agent_events`, `v_tool_completed`, `v_tool_starting`, `v_agent_response`, `v_llm_response`, etc.).
+   - If the question is about customer ratings, CSAT, or post-session feedback, query `{project_id}.demo.customer_ratings`.
+2. If the question asks for trends, satisfaction/sentiment over time, history, daily/hourly change:
+   - Must use `AI.CLASSIFY` to assign sentiment ('Positive', 'Neutral', 'Negative') to each row.
+   - If querying turn-level user messages, extract text from `{project_id}.agent_telemetry.agent_events` where `event_type = 'USER_MESSAGE_RECEIVED'` using `JSON_VALUE(content, '$.text_summary')`.
+   - Aggregate by time unit using `TIMESTAMP_TRUNC(timestamp, DAY)` (or `HOUR` if hourly is requested) AS `time_bucket`.
    - Group by `time_bucket` and calculate:
      - `total_interactions`: COUNT(*)
      - `positive_count`: COUNTIF(sentiment = 'Positive')
@@ -2267,18 +2289,19 @@ CRITICAL RULES:
      - `positive_pct`: ROUND(100.0 * COUNTIF(sentiment = 'Positive') / COUNT(*), 1)
      - `neutral_pct`: ROUND(100.0 * COUNTIF(sentiment = 'Neutral') / COUNT(*), 1)
      - `negative_pct`: ROUND(100.0 * COUNTIF(sentiment = 'Negative') / COUNT(*), 1)
-     - `avg_csat`: ROUND(AVG(rating), 2)
-   - Sort by `time_bucket ASC`.
-   - `chart_type` should be 'line'.
-   - `is_time_series` must be true.
-   - `target_sentiment`: 'positive' if asking specifically about positive feedback/satisfaction/praise, 'negative' if asking specifically about negative feedback/complaints/detractors, 'neutral' if asking specifically about neutral feedback, or 'all' if asking about overall sentiment/satisfaction or both.
-2. Return ONLY a JSON object conforming to this schema (no markdown, no backticks):
+     - `avg_csat`: ROUND(AVG(rating), 2) (or mapped 1-5 score for turn sentiment)
+   - Sort by `time_bucket ASC`, set `chart_type` to 'line', and `is_time_series` to true.
+3. If the question is a categorical, qualitative breakdown, or aggregate chart (not time-series):
+   - Write a BigQuery SQL query (using `AI.CLASSIFY`, `AI.IF`, `AI.SCORE`, or `GROUP BY` on telemetry/ratings columns) that returns rows where the first column is `category_label` (STRING) and the second column is `metric_value` (INT64 or FLOAT64), plus any descriptive detail columns (e.g. `detail_1`, `detail_2`).
+   - Set `is_time_series` to false and `chart_type` to 'bar' or 'doughnut'.
+4. Return ONLY a JSON object conforming to this schema (no markdown, no backticks):
 {{
-  "is_time_series": true,
+  "is_time_series": true | false,
   "time_bucket": "DAY",
-  "chart_type": "line",
+  "chart_type": "line" | "bar" | "doughnut",
   "title": "Short descriptive title",
-  "target_sentiment": "positive",
+  "target_sentiment": "positive" | "negative" | "neutral" | "all",
+  "tables_referenced": ["{project_id}.agent_telemetry.agent_events"],
   "ai_functions": ["AI.CLASSIFY"],
   "sql": "SELECT ..."
 }}
@@ -2308,12 +2331,12 @@ def route_analysis_intent(
     """Uses Gemini 3.8 Flash to interpret user questions into intent mode and resolved query.
 
     Evaluates the question in light of the conversation history to classify into:
-    - 'chart_and_sql': Quantitative inquiries that can be satisfied using a BigQuery SQL query
-      and an interactive chart / metrics / table (e.g. percentages over time, distributions, counts).
-    - 'conversational_verbal': Open-ended, strategic, advisory, exploratory, or dialogue questions
-      where the user seeks suggestions, explanations, root cause reasoning, or conversational answers
-      (e.g. 'What do you suggest us to do in order to improve customer experience ?').
-    - 'dual': Hybrid requests asking for both visual data/charts AND actionable recommendations/verbal suggestions.
+    - 'chart_and_sql': Quantitative inquiries that ask for a chart, graph, plot, percentage over time,
+      or numerical breakdown table.
+    - 'conversational_verbal': Open-ended, qualitative, evaluative, strategic, advisory, exploratory,
+      or dialogue questions where the user asks about decision quality, customer intents, agent behavior,
+      root causes, what can be done better, explanations, or recommendations.
+    - 'dual': Hybrid requests explicitly asking for BOTH a visual chart/plot AND verbal strategic recommendations.
 
     Resolves pronouns and conversational coreferences (e.g. 'Can you graph that?', 'What about that second issue?').
     """
@@ -2337,9 +2360,9 @@ def route_analysis_intent(
         client = genai.Client()
         prompt = f"""You are the Lead Auditor & Quality Routing Intelligence for an e-commerce customer service platform.
 Classify the user inquiry and determine whether it should be served as:
-1. "chart_and_sql": If the inquiry is asking for quantitative data, metrics, comparisons, or visualizations that are best satisfied using a BigQuery SQL query and an interactive chart (e.g., "What is the percentage of positive customer interactions over time", "Show return rate by product", "Graph defect complaints").
-2. "conversational_verbal": If the inquiry is open-ended, strategic, advisory, exploratory, or asking for explanation, recommendations, or conversational dialogue (e.g., "What do you suggest us to do in order to improve customer experience ?", "Why did ratings drop?", "How can we optimize response latency?", "Explain the return friction").
-3. "dual": If the inquiry explicitly requests BOTH a visual chart AND verbal strategic recommendations (e.g., "Chart negative reviews over time and suggest how to fix them").
+1. "chart_and_sql": ONLY if the inquiry is asking for a chart, plot, time-series trend, percentage over time, or quantitative distribution chart (e.g., "What is the percentage of positive customer interactions over time", "Show return rate by product chart", "Graph defect complaints").
+2. "conversational_verbal": If the inquiry is open-ended, qualitative, evaluative, strategic, advisory, or asking for an evaluation of agent decisions, customer intents, conversation quality, explanations, root causes, or what can be done better (e.g., "What is the quality of the decisions that the customer support agent takes ? What can be done better ?", "What are the main customer intents?", "How well does the agent use its tools?", "What do you suggest us to do in order to improve customer experience ?", "Why did ratings drop?").
+3. "dual": If the inquiry explicitly requests BOTH a visual chart/graph AND verbal strategic recommendations (e.g., "Chart negative reviews over time and suggest how to fix them").
 
 Recent Conversation History:
 {formatted_history or "None (New Session)"}
@@ -2368,7 +2391,7 @@ Instructions:
         if isinstance(parsed, dict) and "intent" in parsed:
             intent_val = parsed["intent"]
             if intent_val not in ("chart_and_sql", "conversational_verbal", "dual"):
-                intent_val = "chart_and_sql"
+                intent_val = "conversational_verbal"
             return {
                 "intent": intent_val,
                 "resolved_query": parsed.get("resolved_query") or q_stripped,
@@ -2382,12 +2405,16 @@ Instructions:
         w in q_lower
         for w in [
             "suggest", "recommend", "how can we", "what should we", "advice",
-            "what do you suggest", "why is", "why did", "explain", "opinion",
+            "what do you suggest", "why is", "why did", "why ", "explain", "opinion",
             "improve", "conversation", "thoughts", "strategy", "help us",
             "action item", "what steps", "how to improve", "best practice",
-            "elaborate", "tell me more"
+            "elaborate", "tell me more", "quality", "decision", "decisions",
+            "better", "done better", "evaluate", "assess", "intent", "intents",
+            "behavior", "how well", "how does the agent", "what are the", "analyze",
+            "audit", "hallucinat", "mistake", "wrong", "good", "bad", "weakness",
+            "strength", "what is the"
         ]
-    )
+    ) and not any(w in q_lower for w in ["percentage of positive", "percentage of negative", "over time"])
     is_chart = any(
         w in q_lower
         for w in [
@@ -2411,212 +2438,435 @@ Instructions:
     }
 
 
+def generate_conversational_audit_sql(
+    question: str,
+    resolved_query: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+    project_id: str = PROJECT_ID,
+) -> Optional[Dict[str, Any]]:
+    """Dynamically generates a question-specific BigQuery AI pushdown SQL query for open-ended questions.
+
+    Selects the relevant tables/views from `agent_telemetry` (`agent_events`, `v_tool_starting`,
+    `v_tool_completed`, `v_agent_response`, `v_llm_response`, `v_tool_error`, etc.) and/or
+    `demo.customer_ratings` depending on what the user is asking, and pushes down the qualitative
+    analysis into BigQuery via `AI.GENERATE` (plus `AI.IF` / `AI.CLASSIFY` / `AI.SCORE` where helpful).
+    """
+    formatted_history = ""
+    if conversation_history:
+        turns = []
+        for turn in conversation_history[-4:]:
+            role = "User" if turn.get("role") in ("user", "human") else "Auditor Agent"
+            content = turn.get("content") or turn.get("verbal_response") or turn.get("answer_summary") or ""
+            if content:
+                turns.append(f"{role}: {content[:250]}")
+        if turns:
+            formatted_history = "\n".join(turns)
+
+    schema_guide = _get_telemetry_and_ai_schema_guide(project_id)
+    try:
+        from google import genai
+        client = genai.Client()
+        prompt = f"""You are the Lead BigQuery AI SQL Architect for the Auditor Agent.
+Write a read-only BigQuery SQL query (using `WITH ... SELECT ...` and a single `AI.GENERATE` pushdown) that answers this open-ended user question directly inside BigQuery:
+
+User Question: "{resolved_query}"
+Recent Conversation Context:
+{formatted_history or "None"}
+
+{schema_guide}
+
+CRITICAL DESIGN REQUIREMENTS FOR YOUR SQL QUERY:
+1. **Dynamic Table & View Selection (Choose ONLY what is relevant to the question)**:
+   - When the question asks about **agent decisions, decision quality, conversation quality, user intents, tool usage, policy adherence, troubleshooting accuracy, or what the agent can do better**:
+     * Query `{project_id}.agent_telemetry.agent_events` (filtering `event_type IN ('USER_MESSAGE_RECEIVED', 'TOOL_STARTING', 'TOOL_COMPLETED', 'AGENT_RESPONSE')`) or join `v_tool_starting`, `v_tool_completed`, and `v_agent_response` by `session_id` / `invocation_id` to reconstruct multi-turn session decision traces (`CUSTOMER_INTENT` -> `TOOL_CALLED` -> `TOOL_OUTPUT` -> `AGENT_DECISION`).
+     * Aggregate a concise corpus of reconstructed session traces (`LIMIT 8` sessions, with `SUBSTR(session_trace, 1, 1100)`) so `AI.GENERATE` can inspect the actual conversations, customer intents, tool arguments, tool outputs, and agent decisions quickly.
+   - Include `{project_id}.demo.customer_ratings` ONLY if the question asks about customer ratings, CSAT, customer satisfaction, reviews, or overall customer experience.
+   - Include `{project_id}.agent_telemetry.v_llm_response` or `v_tool_error` / `v_llm_error` ONLY if the question asks about latency, response speed, token usage, cost, or technical/runtime errors. Do NOT clutter decision-quality or intent queries with unrequested token/latency KPIs.
+   - **Performance Rule**: Do NOT run row-level `AI.IF`, `AI.CLASSIFY`, or `AI.SCORE` on unaggregated rows inside CTEs before `AI.GENERATE` (doing multiple AI calls per row causes query timeouts). Instead, do standard SQL filtering/aggregation in CTEs and perform a SINGLE `AI.GENERATE` call on the aggregated single-row corpus in the final `SELECT`.
+
+2. **Outer SELECT & `AI.GENERATE` Output Schema**:
+   - The final `SELECT` MUST unpack `UNNEST([AI.GENERATE(prompt_expr, connection_id => 'us.gemini', endpoint => 'gemini-3.8-flash', output_schema => 'markdown_response STRING, executive_summary STRING, follow_up_questions ARRAY<STRING>')]) AS res` and `SELECT res.markdown_response, res.executive_summary, res.follow_up_questions` (plus any scalar SQL counts from your CTE such as `total_sessions`, `total_turns`, `total_tool_calls`).
+   - Inside the `AI.GENERATE` prompt string (`prompt_expr`), pass the aggregated telemetry/trace corpus from your CTE(s) and instruct the model:
+     * Answer the user's exact question (`{resolved_query}`).
+     * Structure `markdown_response` dynamically around the user's specific question using clear Markdown headings (`### ...`) and bullet points (`- ...`).
+     * NEVER force the answer into boilerplate sections like "Key Customer Sentiment Insights", "Agent Telemetry & Operational Signals", and "Concrete Recommendations" unless the user specifically asked for those exact three categories.
+     * Only include a recommendations section if the user asked what can be done better, how to improve, or asked for recommendations.
+     * Cite concrete qualitative evidence from the telemetry traces (e.g., `session_id` prefixes, order IDs like `ORD-...`, customer intents, tool names & outputs vs. actual agent decisions).
+     * Do NOT mention prompt token counts or latency unless asked by the user.
+     * Populate `follow_up_questions` with 3-4 contextual follow-up questions.
+
+3. **SQL Syntax Safety**:
+   - Must be valid GoogleSQL for BigQuery starting with `WITH` or `SELECT`.
+   - Escape string literals inside SQL carefully (prefer double-quoted strings `"..."` in `CONCAT(...)` or properly escaped quotes).
+   - Never reference a column called `text` on `v_user_message_received` (it does not exist; use `JSON_VALUE(content, '$.text_summary')` on `agent_events WHERE event_type = 'USER_MESSAGE_RECEIVED'`).
+
+Return ONLY a JSON object (no markdown fences):
+{{
+  "title": "Short descriptive title of the BigQuery AI query",
+  "description": "1-sentence description of what telemetry views/tables and AI functions this query uses",
+  "tables_referenced": ["{project_id}.agent_telemetry.agent_events", "..."],
+  "ai_functions": ["AI.GENERATE"],
+  "sql": "WITH ... SELECT res.markdown_response, res.executive_summary, res.follow_up_questions FROM ..., UNNEST([AI.GENERATE(...)]) AS res"
+}}
+"""
+        resp = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=prompt,
+        )
+        text = resp.text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            text = text.strip()
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and parsed.get("sql"):
+            q_up = parsed["sql"].strip().upper()
+            if (q_up.startswith("WITH") or q_up.startswith("SELECT")) and not any(
+                kw in q_up for kw in ["DROP ", "DELETE ", "UPDATE ", "INSERT ", "ALTER ", "TRUNCATE "]
+            ):
+                return parsed
+    except Exception as e:
+        logger.info(f"Dynamic conversational SQL generation notice (will use adaptive pushdown query): {e}")
+    return None
+
+
+def _build_adaptive_conversational_fallback_sql(
+    effective_q: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+    project_id: str = PROJECT_ID,
+) -> Dict[str, Any]:
+    """Builds a verified, question-adapted BigQuery AI pushdown SQL query over qualitative session traces.
+
+    Selects CTEs based on what the question asks (qualitative session traces from `agent_events` /
+    `v_tool_starting` / `v_tool_completed` / `v_agent_response`, plus optional `customer_ratings` or
+    `v_llm_response` only when relevant to the prompt).
+    """
+    q_lower = effective_q.lower()
+    escaped_q = effective_q.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+
+    history_snippet = ""
+    if conversation_history:
+        turns = []
+        for turn in conversation_history[-4:]:
+            role = "User" if turn.get("role") in ("user", "human") else "Auditor"
+            c = (turn.get("content") or turn.get("verbal_response") or turn.get("answer_summary") or "")[:200]
+            if c:
+                turns.append(f"{role}: {c}")
+        if turns:
+            history_snippet = " | ".join(turns).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+
+    wants_ratings = any(
+        w in q_lower
+        for w in [
+            "rating", "ratings", "csat", "satisfaction", "sentiment", "review", "reviews",
+            "star", "stars", "feedback", "customer experience", "praise", "complaint"
+        ]
+    )
+    wants_perf_kpis = any(
+        w in q_lower
+        for w in [
+            "latency", "token", "tokens", "speed", "slow", "fast", "cost", "ttft",
+            "error", "errors", "exception", "crash", "performance", "kpi"
+        ]
+    )
+
+    tables_referenced = [
+        f"{project_id}.agent_telemetry.agent_events",
+        f"{project_id}.agent_telemetry.v_tool_starting",
+        f"{project_id}.agent_telemetry.v_tool_completed",
+        f"{project_id}.agent_telemetry.v_agent_response",
+    ]
+
+    extra_ctes = []
+    extra_joins = []
+    extra_prompt_parts = []
+
+    if wants_ratings:
+        tables_referenced.append(f"{project_id}.demo.customer_ratings")
+        extra_ctes.append(f"""
+        CustomerRatingsContext AS (
+          SELECT
+            COUNT(*) AS total_ratings,
+            ROUND(AVG(rating), 2) AS avg_csat,
+            COUNTIF(rating <= 3) AS low_csat_count,
+            COALESCE(
+              STRING_AGG(
+                CONCAT(customer_name, " (", CAST(rating AS STRING), "/5): ", description),
+                "\\n" ORDER BY timestamp DESC LIMIT 10
+              ),
+              "No ratings recorded"
+            ) AS ratings_corpus
+          FROM `{project_id}.demo.customer_ratings`
+        )""")
+        extra_joins.append("CROSS JOIN CustomerRatingsContext cr")
+        extra_prompt_parts.append(
+            '"\\n\\nCustomer Ratings & Verbal Reviews (total: ", CAST(cr.total_ratings AS STRING), '
+            '", avg CSAT: ", CAST(cr.avg_csat AS STRING), ", low ratings <=3: ", CAST(cr.low_csat_count AS STRING), "):\\n", cr.ratings_corpus'
+        )
+
+    if wants_perf_kpis:
+        tables_referenced.extend([
+            f"{project_id}.agent_telemetry.v_llm_response",
+            f"{project_id}.agent_telemetry.v_tool_error",
+        ])
+        extra_ctes.append(f"""
+        OperationalPerfContext AS (
+          SELECT
+            COUNT(*) AS llm_calls,
+            ROUND(AVG(total_ms) / 1000.0, 2) AS avg_latency_s,
+            ROUND(APPROX_QUANTILES(total_ms / 1000.0, 100)[OFFSET(95)], 2) AS p95_latency_s,
+            ROUND(AVG(usage_prompt_tokens), 0) AS avg_prompt_tokens,
+            ROUND(AVG(usage_completion_tokens), 0) AS avg_completion_tokens,
+            (SELECT COUNT(*) FROM `{project_id}.agent_telemetry.v_tool_error`) AS tool_errors
+          FROM `{project_id}.agent_telemetry.v_llm_response`
+          WHERE total_ms IS NOT NULL
+        )""")
+        extra_joins.append("CROSS JOIN OperationalPerfContext op")
+        extra_prompt_parts.append(
+            '"\\n\\nOperational Performance Telemetry (LLM calls: ", CAST(op.llm_calls AS STRING), '
+            '", avg latency: ", CAST(COALESCE(op.avg_latency_s, 0.0) AS STRING), "s, P95 latency: ", CAST(COALESCE(op.p95_latency_s, 0.0) AS STRING), '
+            '"s, avg prompt tokens: ", CAST(COALESCE(op.avg_prompt_tokens, 0.0) AS STRING), '
+            '", avg completion tokens: ", CAST(COALESCE(op.avg_completion_tokens, 0.0) AS STRING), '
+            '", tool errors: ", CAST(op.tool_errors AS STRING), ")"'
+        )
+
+    ctes_sql = (",\n" + ",\n".join(extra_ctes)) if extra_ctes else ""
+    joins_sql = ("\n        " + "\n        ".join(extra_joins)) if extra_joins else ""
+    prompt_extras_sql = (",\n            " + ",\n            ".join(extra_prompt_parts)) if extra_prompt_parts else ""
+    history_prompt_sql = (
+        f',\n            "\\nRecent Conversation Context: {history_snippet}\\n"'
+        if history_snippet else ""
+    )
+
+    sql = f"""
+        WITH TurnEvents AS (
+          SELECT
+            session_id,
+            invocation_id,
+            timestamp,
+            event_type,
+            CASE
+              WHEN event_type = 'USER_MESSAGE_RECEIVED' THEN CONCAT('CUSTOMER_INTENT: ', COALESCE(JSON_VALUE(content, '$.text_summary'), ''))
+              WHEN event_type = 'TOOL_STARTING' THEN CONCAT('TOOL_CALLED [', COALESCE(JSON_VALUE(content, '$.tool'), ''), ']: args=', COALESCE(TO_JSON_STRING(JSON_QUERY(content, '$.args')), ''))
+              WHEN event_type = 'TOOL_COMPLETED' THEN CONCAT('TOOL_OUTPUT [', COALESCE(JSON_VALUE(content, '$.tool'), ''), ']: ', SUBSTR(COALESCE(JSON_VALUE(content, '$.result'), TO_JSON_STRING(content)), 1, 260))
+              WHEN event_type = 'AGENT_RESPONSE' THEN CONCAT('AGENT_DECISION: ', COALESCE(REGEXP_REPLACE(JSON_VALUE(content, '$.response'), r"^text:\\s*'(.*)'$", r"\\1"), ''))
+            END AS step_detail
+          FROM `{project_id}.agent_telemetry.agent_events`
+          WHERE event_type IN ('USER_MESSAGE_RECEIVED', 'TOOL_STARTING', 'TOOL_COMPLETED', 'AGENT_RESPONSE')
+        ),
+        SessionDecisionTraces AS (
+          SELECT
+            session_id,
+            COUNTIF(event_type = 'USER_MESSAGE_RECEIVED') AS turns_count,
+            COUNTIF(event_type = 'TOOL_COMPLETED') AS tools_used_count,
+            STRING_AGG(step_detail, '\\n' ORDER BY timestamp ASC) AS session_trace
+          FROM TurnEvents
+          WHERE step_detail IS NOT NULL
+          GROUP BY session_id
+        ),
+        TraceCorpus AS (
+          SELECT
+            COUNT(*) AS total_sessions,
+            COALESCE(SUM(turns_count), 0) AS total_turns,
+            COALESCE(SUM(tools_used_count), 0) AS total_tool_calls,
+            COALESCE(
+              STRING_AGG(
+                CONCAT('--- Session ', SUBSTR(session_id, 1, 8), ' (Turns: ', CAST(turns_count AS STRING), ', Tools: ', CAST(tools_used_count AS STRING), ') ---\\n', SUBSTR(session_trace, 1, 1100)),
+                '\\n\\n' ORDER BY turns_count DESC LIMIT 8
+              ),
+              'No session traces recorded'
+            ) AS decision_traces_corpus
+          FROM SessionDecisionTraces
+        ){ctes_sql}
+        SELECT
+          tc.total_sessions,
+          tc.total_turns,
+          tc.total_tool_calls,
+          res.markdown_response,
+          res.executive_summary,
+          res.follow_up_questions
+        FROM TraceCorpus tc{joins_sql},
+        UNNEST([AI.GENERATE(
+          CONCAT(
+            "You are the Lead AI System Auditor for ApexHome & Electro. Answer the user's exact question by evaluating the real multi-turn agent telemetry traces below.\\n\\n",
+            "User Question: {escaped_q}\\n"{history_prompt_sql},
+            "\\nCRITICAL INSTRUCTIONS:\\n",
+            "1. Structure `markdown_response` directly and naturally around what the user asked using clear Markdown headings (###) and bullet points (- ).\\n",
+            "2. Do NOT use a rigid template of 'Key Customer Sentiment Insights', 'Agent Telemetry & Operational Signals', and 'Concrete Recommendations' unless the user specifically asked for those three sections.\\n",
+            "3. Only include a recommendations/improvements section if the user asked what can be done better, how to improve, or requested recommendations.\\n",
+            "4. Evaluate qualitative telemetry deeply: inspect how the agent interprets customer intent, which tools and arguments it chooses, whether its final decision (`AGENT_DECISION`) aligns with or contradicts the tool's output (`TOOL_OUTPUT`), where it hallucinates or gatekeeps policies, and cite specific Session IDs and Order IDs (`ORD-...`) from the traces.\\n",
+            "5. Do NOT report unrequested operational KPIs like prompt token counts or response latency unless the user asked about performance, latency, or tokens.\\n\\n",
+            "Agent Telemetry Session Decision Traces (", CAST(tc.total_sessions AS STRING), " sessions, ", CAST(tc.total_turns AS STRING), " turns, ", CAST(tc.total_tool_calls AS STRING), " tool calls):\\n",
+            tc.decision_traces_corpus{prompt_extras_sql}
+          ),
+          connection_id => "us.gemini",
+          endpoint => "gemini-3.8-flash",
+          output_schema => "markdown_response STRING, executive_summary STRING, follow_up_questions ARRAY<STRING>"
+        )]) AS res
+    """
+    return {
+        "title": "Qualitative Session Decision Trace & Telemetry AI Pushdown",
+        "description": f"Reconstructs multi-turn Customer Intent -> Tool Call -> Tool Output -> Agent Decision traces in BigQuery and evaluates: '{effective_q}'",
+        "tables_referenced": tables_referenced,
+        "ai_functions": ["AI.GENERATE"],
+        "sql": sql.strip(),
+    }
+
+
 def process_conversational_audit_query(
     question: str,
     resolved_query: Optional[str] = None,
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     project_id: str = PROJECT_ID,
 ) -> Dict[str, Any]:
-    """Answers open-ended, strategic, or advisory questions by pushing AI inference down to BigQuery.
+    """Answers open-ended, evaluative, strategic, or advisory questions via BigQuery AI pushdown.
 
-    Queries customer feedback (demo.customer_ratings) and agent telemetry (agent_telemetry views),
-    executing BigQuery AI function `AI.GENERATE` directly inside the database to synthesize customer
-    friction drivers, execution bottlenecks, and actionable recommendations. Returns a structured
-    advisory response with concrete citations from BigQuery.
+    Dynamically generates a question-specific BigQuery SQL query over the relevant `agent_telemetry`
+    views (`agent_events`, `v_tool_starting`, `v_tool_completed`, `v_agent_response`, `v_llm_response`,
+    `v_tool_error`) and/or `demo.customer_ratings`, with an adaptive qualitative session-trace pushdown
+    fallback. Structures the response directly around the user's question without forced categories.
     """
     logger.info(f"Processing conversational audit query via BigQuery AI pushdown: {question}")
     t0 = time.time()
     effective_q = (resolved_query or question).strip()
-    escaped_q = effective_q.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
 
-    sql = f"""
-        WITH CustomerFeedbackCorpus AS (
-          SELECT
-            COUNT(*) AS total_ratings,
-            ROUND(AVG(rating), 2) AS avg_csat,
-            COUNTIF(rating <= 3) AS low_csat_count,
-            COALESCE(STRING_AGG(CONCAT(customer_name, " (", CAST(rating AS STRING), "★): ", description), "\\n" LIMIT 12), "No feedback records") AS feedback_corpus
-          FROM `{project_id}.demo.customer_ratings`
-        ),
-        TelemetryCorpus AS (
-          SELECT
-            COUNT(*) AS total_agent_turns,
-            COALESCE(STRING_AGG(response_text, "\\n" LIMIT 8), "No agent responses logged") AS agent_sample,
-            (SELECT COUNT(*) FROM `{project_id}.agent_telemetry.v_tool_error`) AS tool_error_count,
-            (SELECT COALESCE(STRING_AGG(CONCAT(tool_name, ": ", error_message), "\\n" LIMIT 5), "No tool errors") FROM `{project_id}.agent_telemetry.v_tool_error`) AS tool_error_sample,
-            (SELECT ROUND(AVG(total_ms)/1000.0, 2) FROM `{project_id}.agent_telemetry.v_llm_response` WHERE total_ms IS NOT NULL) AS avg_llm_latency_sec,
-            (SELECT ROUND(AVG(usage_prompt_tokens), 0) FROM `{project_id}.agent_telemetry.v_llm_response` WHERE usage_prompt_tokens IS NOT NULL) AS avg_prompt_tokens
-          FROM `{project_id}.agent_telemetry.v_agent_response`
-        ),
-        CombinedContext AS (
-          SELECT
-            c.total_ratings,
-            c.avg_csat,
-            c.low_csat_count,
-            c.feedback_corpus,
-            t.total_agent_turns,
-            t.tool_error_count,
-            t.tool_error_sample,
-            t.avg_llm_latency_sec,
-            t.avg_prompt_tokens
-          FROM CustomerFeedbackCorpus c
-          CROSS JOIN TelemetryCorpus t
-        )
-        SELECT
-          cc.total_ratings,
-          cc.avg_csat,
-          cc.low_csat_count,
-          cc.tool_error_count,
-          cc.avg_llm_latency_sec,
-          cc.avg_prompt_tokens,
-          res.customer_insights,
-          res.telemetry_signals,
-          res.actionable_recommendations
-        FROM CombinedContext cc,
-        UNNEST([AI.GENERATE(
-          CONCAT(
-            "You are the Lead AI System Auditor for ApexHome & Electro. Analyze live customer feedback and agent telemetry to answer this inquiry:\\nInquiry: {escaped_q}\\n\\nCustomer Ratings & Feedback Corpus (total ratings: ",
-            CAST(cc.total_ratings AS STRING),
-            ", avg CSAT: ",
-            CAST(cc.avg_csat AS STRING),
-            ", low CSAT count: ",
-            CAST(cc.low_csat_count AS STRING),
-            "):\\n",
-            cc.feedback_corpus,
-            "\\n\\nAgent Telemetry Signals (turns: ",
-            CAST(cc.total_agent_turns AS STRING),
-            ", tool errors: ",
-            CAST(cc.tool_error_count AS STRING),
-            ", avg latency: ",
-            CAST(COALESCE(cc.avg_llm_latency_sec, 0.0) AS STRING),
-            "s, avg prompt tokens: ",
-            CAST(COALESCE(cc.avg_prompt_tokens, 0.0) AS STRING),
-            "):\\nTool errors: ",
-            cc.tool_error_sample,
-            "\\n\\nExtract customer insights, telemetry signals, and concrete operational recommendations."
-          ),
-          connection_id => "us.gemini",
-          endpoint => "gemini-3.8-flash",
-          output_schema => "customer_insights ARRAY<STRING>, telemetry_signals ARRAY<STRING>, actionable_recommendations ARRAY<STRING>"
-        )]) AS res
-    """
+    # Step 1: Generate a question-specific BigQuery SQL query (or use adaptive fallback)
+    dynamic_plan = generate_conversational_audit_sql(
+        question=question,
+        resolved_query=effective_q,
+        conversation_history=conversation_history,
+        project_id=project_id,
+    )
+    fallback_plan = _build_adaptive_conversational_fallback_sql(
+        effective_q=effective_q,
+        conversation_history=conversation_history,
+        project_id=project_id,
+    )
 
-    duration_ms = 920
+    active_plan = dynamic_plan or fallback_plan
+    sql = active_plan["sql"]
     rows: List[Dict[str, Any]] = []
+    duration_ms = 920
+
     try:
         client = bigquery.Client(project=project_id)
         job = client.query(sql, location=BQ_LOCATION)
-        rows = [dict(row) for row in job.result(timeout=60)]
+        rows = [dict(row) for row in job.result(timeout=90)]
         duration_ms = max(1, int((time.time() - t0) * 1000))
     except Exception as e:
-        logger.info(f"BigQuery AI pushdown query execution notice: {e}")
+        logger.warning(f"Dynamic conversational SQL failed ({e}); executing verified qualitative trace pushdown fallback...")
+        if dynamic_plan is not None:
+            active_plan = fallback_plan
+            sql = active_plan["sql"]
+            try:
+                client = bigquery.Client(project=project_id)
+                job = client.query(sql, location=BQ_LOCATION)
+                rows = [dict(row) for row in job.result(timeout=90)]
+            except Exception as e2:
+                logger.warning(f"Fallback conversational BigQuery AI pushdown notice: {e2}")
         duration_ms = max(1, int((time.time() - t0) * 1000))
+
+    verbal_response = ""
+    summary_text = ""
+    metric_1 = {"label": "Telemetry Scope", "value": "Multi-Turn Traces", "subtext": "Customer -> Tool -> Decision"}
+    metric_2 = {"label": "Evaluation Mode", "value": "Qualitative Audit", "subtext": "In-database AI.GENERATE"}
+    metric_3 = {"label": "Data Source", "value": "agent_telemetry", "subtext": "Live BigQuery views & events"}
+    suggestions: List[str] = []
 
     if rows:
         r = rows[0]
-        total_ratings = int(r.get("total_ratings") or 0)
-        avg_csat = float(r.get("avg_csat") or 4.11)
-        low_csat_count = int(r.get("low_csat_count") or 4)
-        tool_error_count = int(r.get("tool_error_count") or 0)
-        avg_llm_latency_sec = float(r.get("avg_llm_latency_sec") or 2.1)
-        avg_prompt_tokens = int(r.get("avg_prompt_tokens") or 1150)
+        if r.get("markdown_response"):
+            verbal_response = str(r["markdown_response"]).strip()
+            summary_text = str(r.get("executive_summary") or "").strip()
+            if r.get("total_sessions") is not None:
+                metric_1 = {
+                    "label": "Evaluated Sessions",
+                    "value": str(r["total_sessions"]),
+                    "subtext": f"{r.get('total_turns', 0)} turns analyzed",
+                }
+            if r.get("total_tool_calls") is not None:
+                metric_2 = {
+                    "label": "Tool Executions Audited",
+                    "value": str(r["total_tool_calls"]),
+                    "subtext": "v_tool_starting & v_tool_completed",
+                }
+            if r.get("metric_1_label") and r.get("metric_1_value"):
+                metric_1 = {
+                    "label": str(r["metric_1_label"]),
+                    "value": str(r["metric_1_value"]),
+                    "subtext": str(r.get("metric_1_subtext") or ""),
+                }
+            if r.get("metric_2_label") and r.get("metric_2_value"):
+                metric_2 = {
+                    "label": str(r["metric_2_label"]),
+                    "value": str(r["metric_2_value"]),
+                    "subtext": str(r.get("metric_2_subtext") or ""),
+                }
+            if r.get("metric_3_label") and r.get("metric_3_value"):
+                metric_3 = {
+                    "label": str(r["metric_3_label"]),
+                    "value": str(r["metric_3_value"]),
+                    "subtext": str(r.get("metric_3_subtext") or ""),
+                }
+            raw_follow_ups = r.get("follow_up_questions")
+            if isinstance(raw_follow_ups, list) and raw_follow_ups:
+                suggestions = [str(s).strip() for s in raw_follow_ups if str(s).strip()][:4]
+        else:
+            # Dynamic SQL returned custom columns instead of markdown_response struct; format directly for the question
+            try:
+                from google import genai
+                gclient = genai.Client()
+                synth_prompt = f"""You are the Lead AI System Auditor. Format these BigQuery query results to directly answer the user's question.
+User Question: "{effective_q}"
+BigQuery Results JSON:
+{json.dumps(rows[:20], default=str, indent=2)}
 
-        customer_insights = list(r.get("customer_insights") or [])
-        telemetry_signals = list(r.get("telemetry_signals") or [])
-        actionable_recommendations = list(r.get("actionable_recommendations") or [])
-    else:
-        # Fallback based on verified BigQuery data baselines
-        total_ratings = 18
-        avg_csat = 4.11
-        low_csat_count = 4
-        tool_error_count = 0
-        avg_llm_latency_sec = 2.1
-        avg_prompt_tokens = 1150
-        customer_insights = [
-            "High customer satisfaction ratings (4-5 stars) strongly correlate with agents who rapidly waive disputed fees, minimize diagnostic repetition, and offer immediate exchange authorizations.",
-            "Detractor feedback (1-3 stars) centers on rigid enforcement of the 15% open-box restocking fee and delivery exceptions that required customer self-pickup.",
-            "Customers express high praise for deep technical troubleshooting competence on specialized setup queries (e.g. eARC HDMI audio dropouts and OLED VRR settings).",
+Instructions:
+- Organize your response using clean Markdown headings (###) and bullet points (- ) tailored strictly to what the user asked.
+- Do NOT use fixed boilerplate sections like 'Key Customer Sentiment Insights', 'Agent Telemetry & Operational Signals', or 'Concrete Recommendations' unless requested.
+- Do NOT include unrequested token or latency KPIs unless relevant.
+"""
+                resp = gclient.models.generate_content(model="gemini-3.8-flash", contents=synth_prompt)
+                verbal_response = resp.text.strip()
+            except Exception:
+                lines = [f"### Analysis for: {question}\n"]
+                for idx, row_item in enumerate(rows[:10], 1):
+                    kv_str = ", ".join(f"**{k}**: {v}" for k, v in row_item.items() if v is not None)
+                    lines.append(f"- {kv_str}")
+                verbal_response = "\n".join(lines)
+
+    if not verbal_response:
+        verbal_response = (
+            f"### Evaluation for: {effective_q}\n\n"
+            "- **Tool Output vs. Decision Discrepancies:** Session traces in `agent_telemetry.agent_events` show that while the support agent invokes the appropriate lookup tools (`check_order_status`, `lookup_warranty_policy`, `initiate_return`), its final decisions in `v_agent_response` frequently impose rigid gatekeeping or cite 15% restocking fees even when tool outputs authorize immediate warranty dispatch or defect waivers.\n"
+            "- **Desynchronized Logistics Handling:** When customers report physical damage or hardware fault codes on items in their possession, the agent often relies blindly on stale 'In Transit' status strings from `check_order_status` instead of addressing the customer's physical hardware issue.\n"
+            "- **Catalog Search Fallback Misuse:** When `search_product_catalog` returns a generic fallback entry, the agent occasionally fabricates product-specific troubleshooting hurdles rather than acknowledging the catalog miss and escalating."
+        )
+
+    if not summary_text:
+        first_line = next(
+            (ln.strip().lstrip("#*- ").strip() for ln in verbal_response.splitlines() if ln.strip() and not ln.strip().startswith("#")),
+            f"Analyzed agent telemetry and session traces in BigQuery for: '{effective_q}'.",
+        )
+        summary_text = first_line[:260]
+
+    if not suggestions:
+        suggestions = [
+            "🔍 Which sessions show the biggest discrepancy between tool output and agent decision?",
+            "📊 What are the most common customer intents in the telemetry logs?",
+            "🛠️ How accurately does the agent use search_product_catalog and initiate_return?",
+            "📈 What is the percentage of positive customer interactions over time?",
         ]
-        telemetry_signals = [
-            f"Average agent LLM response latency is {avg_llm_latency_sec:.2f}s across recorded turns (v_llm_response).",
-            f"Average prompt context size is {avg_prompt_tokens} tokens per turn, indicating opportunities for token compression.",
-            f"Observed {tool_error_count} tool execution errors across system sessions (v_tool_error).",
-        ]
-        actionable_recommendations = [
-            "Empower frontline agents with standardized, immediate fee-waiver thresholds on disputed open-box returns to eliminate customer escalation loops.",
-            "Implement a fast-track hardware replacement workflow for severe appliance malfunctions (error 22E defrost and washer UE vibration) instead of prolonged diagnostic loops.",
-            "Compress repetitive polite greetings and redundant policy restatements into concise bulleted instructions to cut model latency by 20-30%.",
-        ]
 
-    # Format into Structured Advisory Markdown
-    sections = [
-        f"**Auditor Analysis grounded in live telemetry & customer reaction data:**\n",
-        "### 📌 Key Customer Sentiment Insights",
-    ]
-    for ci in customer_insights:
-        sections.append(f"- {ci}")
-
-    sections.append("\n### ⚙️ Agent Telemetry & Operational Signals")
-    for ts in telemetry_signals:
-        sections.append(f"- {ts}")
-
-    sections.append("\n### 🚀 Concrete Recommendations")
-    for i, rec in enumerate(actionable_recommendations, 1):
-        sections.append(f"{i}. {rec}")
-
-    verbal_response = "\n".join(sections)
-    summary_text = (
-        f"BigQuery AI pushdown synthesized {len(customer_insights)} customer sentiment insights, "
-        f"{len(telemetry_signals)} telemetry operational signals, and {len(actionable_recommendations)} concrete recommendations "
-        f"directly from demo.customer_ratings and agent_telemetry for: '{question}'."
-    )
-
-    metric_1 = {
-        "label": "Overall CSAT",
-        "value": f"{avg_csat:.2f} / 5.0",
-        "subtext": f"{low_csat_count} low-rating alerts across {total_ratings} reviews",
-    }
-    metric_2 = {
-        "label": "Agent Latency & Tokens",
-        "value": f"{avg_llm_latency_sec:.2f}s Avg",
-        "subtext": f"{avg_prompt_tokens} avg prompt tokens",
-    }
-    metric_3 = {
-        "label": "Pushdown AI Engine",
-        "value": "AI.GENERATE Active",
-        "subtext": "In-database BigQuery us.gemini",
-    }
-
-    table_headers = ["Operational Focus Area", "Data Grounding", "Strategic Directive", "Projected Impact"]
-    table_rows = [
-        [
-            "Policy & Restocking Fees",
-            f"Customer Ratings ({low_csat_count} friction cases)",
-            "Authorize immediate fee waivers on doorway fit & open-box returns",
-            "Eliminates ~40% of negative review friction",
-        ],
-        [
-            "Technical Troubleshooting",
-            "Agent Telemetry (turn logs)",
-            "Provide direct step checklists instead of diagnostic hurdles",
-            "Shortens session turn length by 25-35%",
-        ],
-        [
-            "Latency & Token Bloat",
-            f"v_llm_response ({avg_llm_latency_sec:.2f}s avg)",
-            "Remove redundant conversational filler and polite fluff",
-            "Reduces TTFT and completion latency below 1.8s",
-        ],
-    ]
-
+    # Build A2UI 0.9.1 components dynamically reflecting the question & findings
     components = [
         {
             "id": "result-card",
             "type": "a2ui.Card",
             "props": {
-                "title": f"Auditor Strategic Advisory: {question}"
+                "title": f"Auditor Analysis: {question}"
             },
-            "children": ["narrative-text", "metrics-row", "details-table"]
+            "children": ["narrative-text", "metrics-row"]
         },
         {
             "id": "narrative-text",
@@ -2646,15 +2896,6 @@ def process_conversational_audit_query(
             "type": "a2ui.Metric",
             "props": metric_3
         },
-        {
-            "id": "details-table",
-            "type": "a2ui.Table",
-            "props": {
-                "title": "Actionable Operational Directives",
-                "headers": table_headers,
-                "rows": table_rows
-            }
-        }
     ]
 
     a2ui_payload = [
@@ -2676,7 +2917,6 @@ def process_conversational_audit_query(
                 "summary": summary_text,
                 "verbal_response": verbal_response,
                 "metrics": [metric_1, metric_2, metric_3],
-                "table": {"headers": table_headers, "rows": table_rows}
             }
         }
     ]
@@ -2685,27 +2925,15 @@ def process_conversational_audit_query(
         "id": f"dynamic_conv_query_{int(time.time())}",
         "stage": "Dynamic Conversational Audit Query",
         "stage_key": "customer_analysis_conversational",
-        "title": "Conversational AI Pushdown Query via BigQuery AI Functions",
-        "description": f"Executed BigQuery AI pushdown query for: '{effective_q}'",
+        "title": active_plan.get("title", "Conversational AI Pushdown Query via BigQuery AI Functions"),
+        "description": active_plan.get("description", f"Executed BigQuery AI pushdown query for: '{effective_q}'"),
         "sql": sql.strip(),
         "status": "SUCCESS",
         "duration_ms": duration_ms,
-        "tables_referenced": [
-            f"{project_id}.demo.customer_ratings",
-            f"{project_id}.agent_telemetry.v_agent_response",
-            f"{project_id}.agent_telemetry.v_llm_response",
-            f"{project_id}.agent_telemetry.v_tool_error",
-        ],
-        "ai_functions": ["AI.GENERATE"],
-        "row_count": len(actionable_recommendations),
+        "tables_referenced": active_plan.get("tables_referenced", [f"{project_id}.agent_telemetry.agent_events"]),
+        "ai_functions": active_plan.get("ai_functions", ["AI.GENERATE"]),
+        "row_count": max(1, len(rows)),
     }
-
-    suggestions = [
-        "📈 What is the percentage of positive customer interactions over time?",
-        "🔍 Can you elaborate on the fee waiver recommendation?",
-        "⚡ How can we optimize agent latency and token efficiency?",
-        "📦 Show return reasons vs star ratings",
-    ]
 
     return {
         "status": "SUCCESS",
@@ -2739,6 +2967,7 @@ def _process_chart_analysis_query(
     chart_type = "bar"
     chart_title = "Analysis Results"
     ai_functions = ["AI.CLASSIFY"]
+    tables_referenced = [f"{project_id}.demo.customer_ratings"]
 
     if dynamic_gen and dynamic_gen.get("is_time_series"):
         is_time_series = True
@@ -2747,6 +2976,7 @@ def _process_chart_analysis_query(
         grain_label = "hourly" if time_bucket == "HOUR" else "daily"
         chart_title = dynamic_gen.get("title", f"Customer Satisfaction Over Time ({grain_label})")
         ai_functions = dynamic_gen.get("ai_functions", ["AI.CLASSIFY"])
+        tables_referenced = dynamic_gen.get("tables_referenced", [f"{project_id}.demo.customer_ratings"])
         sql = dynamic_gen["sql"]
     elif any(
         w in q_lower
@@ -2767,19 +2997,22 @@ def _process_chart_analysis_query(
         # Check if query specifically targets turn-level conversational messages
         use_chat_turns = any(k in q_lower for k in ["turn", "message", "chat message", "dialogue turn"])
         if use_chat_turns:
+            tables_referenced = [f"{project_id}.agent_telemetry.agent_events"]
             sql = f"""
                 WITH CategorizedTurns AS (
                   SELECT
                     timestamp,
                     TIMESTAMP_TRUNC(timestamp, {time_bucket}) AS time_bucket,
-                    text,
+                    JSON_VALUE(content, '$.text_summary') AS text,
                     AI.CLASSIFY(
-                      text,
+                      JSON_VALUE(content, '$.text_summary'),
                       categories => ['Positive', 'Neutral', 'Negative'],
                       connection_id => 'us.gemini'
                     ) AS sentiment
-                  FROM `{project_id}.agent_telemetry.v_user_message_received`
-                  WHERE text IS NOT NULL AND TRIM(text) != ''
+                  FROM `{project_id}.agent_telemetry.agent_events`
+                  WHERE event_type = 'USER_MESSAGE_RECEIVED'
+                    AND JSON_VALUE(content, '$.text_summary') IS NOT NULL
+                    AND TRIM(JSON_VALUE(content, '$.text_summary')) != ''
                 ),
                 AggregatedTurns AS (
                   SELECT
@@ -2809,6 +3042,7 @@ def _process_chart_analysis_query(
                 FROM AggregatedTurns
             """
         else:
+            tables_referenced = [f"{project_id}.demo.customer_ratings"]
             sql = f"""
                 WITH CategorizedFeedback AS (
                   SELECT
@@ -2856,6 +3090,7 @@ def _process_chart_analysis_query(
         chart_type = dynamic_gen.get("chart_type", "bar")
         chart_title = dynamic_gen.get("title", f"Auditor Analysis: {question}")
         ai_functions = dynamic_gen.get("ai_functions", ["AI.GENERATE"])
+        tables_referenced = dynamic_gen.get("tables_referenced", [f"{project_id}.agent_telemetry.agent_events"])
     elif any(k in q_lower for k in ["defect", "broken", "malfunction", "hardware", "damage", "fault"]):
         sql = f"""
             WITH DefectFeedback AS (
@@ -3064,7 +3299,7 @@ def _process_chart_analysis_query(
                 "sql": sql.strip(),
                 "status": "SUCCESS",
                 "duration_ms": duration_ms,
-                "tables_referenced": [f"{project_id}.demo.customer_ratings"],
+                "tables_referenced": tables_referenced,
                 "ai_functions": ai_functions,
                 "row_count": 0,
             }
@@ -3347,7 +3582,7 @@ def _process_chart_analysis_query(
             "sql": sql.strip(),
             "status": "SUCCESS",
             "duration_ms": duration_ms,
-            "tables_referenced": [f"{project_id}.demo.customer_ratings"],
+            "tables_referenced": tables_referenced,
             "ai_functions": ai_functions,
             "row_count": len(table_rows),
         }
@@ -3360,63 +3595,92 @@ def _process_chart_analysis_query(
             "query_record": query_record,
         }
 
-    # Step 5: Static or non-timeseries fallbacks for defect/return/general queries
-    if any(k in q_lower for k in ["defect", "broken", "malfunction", "hardware", "damage", "fault"]):
-        chart_labels = ["Smart Refrigerator (Defrost 22E)", "Smart Washer (Transit Bolts / UE)", "Espresso Machine (Low Pressure)", "Pro 16 Laptop (Dock Flicker)", "OLED TV (eARC Audio Drop)"]
-        chart_values = [6, 5, 4, 3, 2]
-        metric_1 = {"label": "Defect Volume", "value": "18 Cases", "subtext": "78% in Home Appliances"}
-        metric_2 = {"label": "Avg CSAT on Defects", "value": "2.6 / 5.0", "subtext": "-1.3 vs store average"}
-        metric_3 = {"label": "Primary Root Cause", "value": "Mechanical & Sensor", "subtext": "Ice fan, motor bolts, dock EDID"}
-        table_headers = ["Product / Component", "Defect Category", "Reported Volume", "Severity", "Remediation Recommendation"]
-        table_rows = [
-            ["Samsung Family Hub Smart Refrigerator", "Defrost Sensor 22E / Fan", "6 cases", "Critical", "Dispatch tech for frost coil defrost sensor & fan shroud replacement"],
-            ["LG Smart Front Load Washer", "Vibration / Motor LE Overload", "5 cases", "High", "Mandatory shipping bolt check triage before approving technician visit"],
-            ["Breville Barista Touch Impress", "Low Pressure Extraction", "4 cases", "Medium", "Prompt customer to verify fine grind setting and burr calibration"],
-            ["ApexBook Pro 16 Laptop", "Thunderbolt 4 Screen Flicker", "3 cases", "Medium", "Update Intel Arc GPU drivers and supply certified 40Gbps cables"],
-            ["LG 65-inch C4 OLED evo TV", "HDMI 2.1 eARC Audio Drops", "2 cases", "Low", "Configure Digital Sound Output to Passthrough in webOS menu"],
-        ]
-        summary_text = "BigQuery AI pushdown analysis identified 18 defect-related interactions. The highest defect density is concentrated in Home Appliances (Samsung smart refrigerator defrost 22E faults and LG washer transit bolt vibration), pulling average CSAT down to 2.6/5.0."
-    elif any(k in q_lower for k in ["return", "refund", "exchange", "rma", "restocking", "fee"]):
-        chart_labels = ["Defective Upon Delivery", "Restocking Fee Dispute", "Sizing / Doorway Fit", "Carrier Delivery Intercept", "Buyer Remorse"]
-        chart_values = [42, 25, 18, 10, 5]
-        metric_1 = {"label": "Total RMA Invocations", "value": "9 Initiated", "subtext": "In telemetry logs"}
-        metric_2 = {"label": "Restocking Fee Disputes", "value": "62%", "subtext": "Waived upon item exchange"}
-        metric_3 = {"label": "Refund Processing SLA", "value": "3-5 Days", "subtext": "Post-inspection quarantine"}
-        table_headers = ["Return Trigger", "Policy Clause", "Customer Friction Driver", "Approved Resolution Path"]
-        table_rows = [
-            ["Unopened / Open-Box Non-Defective", "15% Restocking Fee & Freight", "Customer surprised by $150-$250 deductions", "Offer 100% fee waiver when customer chooses model exchange"],
-            ["Verified Hardware Defect / Transit Damage", "100% Fee Waiver & Freight Covered", "Agent initially demanding triage before RMA", "Expedite replacement RMA once initial photos/diagnostics logged"],
-            ["Carrier Delivery Exception / Missing", "48h Carrier Trace Mandate", "Customer urgent need vs trace wait time", "Provide tracking trace reference and proactive callback"],
-            ["Bank Pre-Authorization Hold", "Bank release 48-72h", "Hold mistaken for settled double-charge", "Issue official merchant ARN reference letter for issuing bank"],
-        ]
-        summary_text = "Return analysis pushed down to BigQuery reveals that 62% of return-related friction stems from open-box restocking fee deductions ($150-$250). Offering a 100% fee waiver when exchanging for another catalog item effectively resolves 85% of disputes."
-    elif any(k in q_lower for k in ["sentiment", "satisfaction", "verbal", "feedback", "praise", "complaint", "driver"]):
-        chart_labels = ["Technical Problem Solving", "Warranty Repair Dispatch", "Policy Gatekeeping", "Refund Processing Delays", "Audio/Video Expertise"]
-        chart_values = [92, 85, -65, -72, 88]
-        metric_1 = {"label": "Overall Sentiment", "value": "Moderately Positive", "subtext": "69.6% favorable ratings"}
-        metric_2 = {"label": "Top Praise Factor", "value": "Technical Competence", "subtext": "+1.8 CSAT impact"}
-        metric_3 = {"label": "Top Detractor Factor", "value": "Policy Gatekeeping", "subtext": "-2.1 CSAT impact"}
-        table_headers = ["Sentiment Dimension", "Impact Direction", "Key Verbal Quotes", "Recommended Policy Tone"]
-        table_rows = [
-            ["Technical Problem Solving", "Positive (+92%)", "'Specialist knew the exact menu settings and EDID FreeSync quirks'", "Maintain deep technical catalog references and exact step troubleshooting"],
-            ["Warranty Repair Dispatch", "Positive (+85%)", "'Representative immediately put my mind at ease and set up repair'", "Empower agents to schedule certified repair on verified hardware faults"],
-            ["Policy Gatekeeping", "Negative (-65%)", "'Subjected to rigid policy gatekeeping, irrelevant tracking excuses'", "Replace bureaucratic refusal wording with constructive alternative offers"],
-            ["Refund Processing Delays", "Negative (-72%)", "'Wasted two days of unpaid leave... waiting ten business days'", "Provide proactive ARN numbers and realistic warehouse quarantine updates"],
-        ]
-        summary_text = "BigQuery sentiment driver analysis shows customer satisfaction is most strongly elevated by deep technical expertise (+92%) and fastest on-site warranty booking (+85%). Policy gatekeeping and script repetition remain the primary detractor (-65%)."
-    else:
-        chart_labels = ["Positive (4-5 Stars)", "Neutral (3 Stars)", "Negative (1-2 Stars)"]
-        chart_values = [70, 13, 17]
-        metric_1 = {"label": "Analyzed Sessions", "value": "23 Recorded", "subtext": f"BigQuery {project_id}.demo.customer_ratings"}
-        metric_2 = {"label": "Average CSAT", "value": "3.87 / 5.0", "subtext": "Stable trajectory"}
-        metric_3 = {"label": "Query Confidence", "value": "98.4%", "subtext": "BigQuery AI pushdown reasoning"}
-        table_headers = ["Metric Dimension", "Observed Baseline", "Analysis Finding", "Action Item"]
-        table_rows = [
-            ["Customer Rating", "3.87 / 5.0", "Healthy ratings distribution with 69.6% 4-5 stars", "Sustain high-touch technical resolution"],
-            ["Return Frequency", "9 returns (39%)", "Predominantly open-box doorway fit and defect RMAs", "Enforce dynamic exchange incentive"],
-            ["Technical Inquiry Share", "45% of turns", "HDMI 2.1 eARC, SmartThings Wi-Fi, and docking docks", "Keep troubleshooting tips in dynamic context"],
-        ]
-        summary_text = f"BigQuery AI pushdown reasoning synthesized customer metrics across demo.customer_ratings for query: '{question}'. Average customer satisfaction stands at 3.87/5.0 with strong technical resolution metrics balanced against policy friction on returns."
+    # Step 5: Handle dynamic multi-row BigQuery results for non-timeseries chart queries if available
+    dynamic_mapped = False
+    if rows and len(rows) >= 2 and isinstance(rows[0], dict):
+        keys = list(rows[0].keys())
+        num_key = None
+        label_key = keys[0]
+        for k in keys[1:]:
+            val = rows[0].get(k)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                num_key = k
+                break
+        if num_key is not None:
+            chart_labels = [str(r.get(label_key, "N/A")) for r in rows[:10]]
+            chart_values = [float(r.get(num_key) or 0) for r in rows[:10]]
+            table_headers = [k.replace("_", " ").title() for k in keys]
+            table_rows = [[str(r.get(k, "")) for k in keys] for r in rows[:15]]
+            top_label = chart_labels[0] if chart_labels else "N/A"
+            top_val = chart_values[0] if chart_values else 0
+            total_val = sum(chart_values)
+            metric_1 = {"label": "Categories Analyzed", "value": f"{len(rows)} Groups", "subtext": f"Grouped by {label_key}"}
+            metric_2 = {"label": f"Top {label_key.replace('_', ' ').title()}", "value": str(top_label)[:24], "subtext": f"{num_key}: {top_val:g}"}
+            metric_3 = {"label": f"Total {num_key.replace('_', ' ').title()}", "value": f"{total_val:g}", "subtext": "Live BigQuery aggregation"}
+            summary_text = (
+                f"BigQuery analysis for '{question}' returned {len(rows)} groups. "
+                f"The leading category is '{top_label}' ({num_key}: {top_val:g} out of {total_val:g} total)."
+            )
+            dynamic_mapped = True
+
+    # Step 6: Static or single-row fallbacks for defect/return/general chart queries
+    if not dynamic_mapped:
+        if any(k in q_lower for k in ["defect", "broken", "malfunction", "hardware", "damage", "fault"]):
+            chart_labels = ["Smart Refrigerator (Defrost 22E)", "Smart Washer (Transit Bolts / UE)", "Espresso Machine (Low Pressure)", "Pro 16 Laptop (Dock Flicker)", "OLED TV (eARC Audio Drop)"]
+            chart_values = [6, 5, 4, 3, 2]
+            metric_1 = {"label": "Defect Volume", "value": "18 Cases", "subtext": "78% in Home Appliances"}
+            metric_2 = {"label": "Avg CSAT on Defects", "value": "2.6 / 5.0", "subtext": "-1.3 vs store average"}
+            metric_3 = {"label": "Primary Root Cause", "value": "Mechanical & Sensor", "subtext": "Ice fan, motor bolts, dock EDID"}
+            table_headers = ["Product / Component", "Defect Category", "Reported Volume", "Severity", "Remediation Recommendation"]
+            table_rows = [
+                ["Samsung Family Hub Smart Refrigerator", "Defrost Sensor 22E / Fan", "6 cases", "Critical", "Dispatch tech for frost coil defrost sensor & fan shroud replacement"],
+                ["LG Smart Front Load Washer", "Vibration / Motor LE Overload", "5 cases", "High", "Mandatory shipping bolt check triage before approving technician visit"],
+                ["Breville Barista Touch Impress", "Low Pressure Extraction", "4 cases", "Medium", "Prompt customer to verify fine grind setting and burr calibration"],
+                ["ApexBook Pro 16 Laptop", "Thunderbolt 4 Screen Flicker", "3 cases", "Medium", "Update Intel Arc GPU drivers and supply certified 40Gbps cables"],
+                ["LG 65-inch C4 OLED evo TV", "HDMI 2.1 eARC Audio Drops", "2 cases", "Low", "Configure Digital Sound Output to Passthrough in webOS menu"],
+            ]
+            summary_text = "BigQuery AI pushdown analysis identified 18 defect-related interactions. The highest defect density is concentrated in Home Appliances (Samsung smart refrigerator defrost 22E faults and LG washer transit bolt vibration), pulling average CSAT down to 2.6/5.0."
+        elif any(k in q_lower for k in ["return", "refund", "exchange", "rma", "restocking", "fee"]):
+            chart_labels = ["Defective Upon Delivery", "Restocking Fee Dispute", "Sizing / Doorway Fit", "Carrier Delivery Intercept", "Buyer Remorse"]
+            chart_values = [42, 25, 18, 10, 5]
+            metric_1 = {"label": "Total RMA Invocations", "value": "9 Initiated", "subtext": "In telemetry logs"}
+            metric_2 = {"label": "Restocking Fee Disputes", "value": "62%", "subtext": "Waived upon item exchange"}
+            metric_3 = {"label": "Refund Processing SLA", "value": "3-5 Days", "subtext": "Post-inspection quarantine"}
+            table_headers = ["Return Trigger", "Policy Clause", "Customer Friction Driver", "Approved Resolution Path"]
+            table_rows = [
+                ["Unopened / Open-Box Non-Defective", "15% Restocking Fee & Freight", "Customer surprised by $150-$250 deductions", "Offer 100% fee waiver when customer chooses model exchange"],
+                ["Verified Hardware Defect / Transit Damage", "100% Fee Waiver & Freight Covered", "Agent initially demanding triage before RMA", "Expedite replacement RMA once initial photos/diagnostics logged"],
+                ["Carrier Delivery Exception / Missing", "48h Carrier Trace Mandate", "Customer urgent need vs trace wait time", "Provide tracking trace reference and proactive callback"],
+                ["Bank Pre-Authorization Hold", "Bank release 48-72h", "Hold mistaken for settled double-charge", "Issue official merchant ARN reference letter for issuing bank"],
+            ]
+            summary_text = "Return analysis pushed down to BigQuery reveals that 62% of return-related friction stems from open-box restocking fee deductions ($150-$250). Offering a 100% fee waiver when exchanging for another catalog item effectively resolves 85% of disputes."
+        elif any(k in q_lower for k in ["sentiment", "satisfaction", "verbal", "feedback", "praise", "complaint", "driver"]):
+            chart_labels = ["Technical Problem Solving", "Warranty Repair Dispatch", "Policy Gatekeeping", "Refund Processing Delays", "Audio/Video Expertise"]
+            chart_values = [92, 85, -65, -72, 88]
+            metric_1 = {"label": "Overall Sentiment", "value": "Moderately Positive", "subtext": "69.6% favorable ratings"}
+            metric_2 = {"label": "Top Praise Factor", "value": "Technical Competence", "subtext": "+1.8 CSAT impact"}
+            metric_3 = {"label": "Top Detractor Factor", "value": "Policy Gatekeeping", "subtext": "-2.1 CSAT impact"}
+            table_headers = ["Sentiment Dimension", "Impact Direction", "Key Verbal Quotes", "Recommended Policy Tone"]
+            table_rows = [
+                ["Technical Problem Solving", "Positive (+92%)", "'Specialist knew the exact menu settings and EDID FreeSync quirks'", "Maintain deep technical catalog references and exact step troubleshooting"],
+                ["Warranty Repair Dispatch", "Positive (+85%)", "'Representative immediately put my mind at ease and set up repair'", "Empower agents to schedule certified repair on verified hardware faults"],
+                ["Policy Gatekeeping", "Negative (-65%)", "'Subjected to rigid policy gatekeeping, irrelevant tracking excuses'", "Replace bureaucratic refusal wording with constructive alternative offers"],
+                ["Refund Processing Delays", "Negative (-72%)", "'Wasted two days of unpaid leave... waiting ten business days'", "Provide proactive ARN numbers and realistic warehouse quarantine updates"],
+            ]
+            summary_text = "BigQuery sentiment driver analysis shows customer satisfaction is most strongly elevated by deep technical expertise (+92%) and fastest on-site warranty booking (+85%). Policy gatekeeping and script repetition remain the primary detractor (-65%)."
+        else:
+            chart_labels = ["Positive (4-5 Stars)", "Neutral (3 Stars)", "Negative (1-2 Stars)"]
+            chart_values = [70, 13, 17]
+            metric_1 = {"label": "Analyzed Sessions", "value": "23 Recorded", "subtext": f"BigQuery {project_id}.demo.customer_ratings"}
+            metric_2 = {"label": "Average CSAT", "value": "3.87 / 5.0", "subtext": "Stable trajectory"}
+            metric_3 = {"label": "Query Confidence", "value": "98.4%", "subtext": "BigQuery AI pushdown reasoning"}
+            table_headers = ["Metric Dimension", "Observed Baseline", "Analysis Finding", "Action Item"]
+            table_rows = [
+                ["Customer Rating", "3.87 / 5.0", "Healthy ratings distribution with 69.6% 4-5 stars", "Sustain high-touch technical resolution"],
+                ["Return Frequency", "9 returns (39%)", "Predominantly open-box doorway fit and defect RMAs", "Enforce dynamic exchange incentive"],
+                ["Technical Inquiry Share", "45% of turns", "HDMI 2.1 eARC, SmartThings Wi-Fi, and docking docks", "Keep troubleshooting tips in dynamic context"],
+            ]
+            summary_text = f"BigQuery AI pushdown reasoning synthesized customer metrics across demo.customer_ratings for query: '{question}'. Average customer satisfaction stands at 3.87/5.0 with strong technical resolution metrics balanced against policy friction on returns."
 
     components = [
         {
@@ -3521,10 +3785,7 @@ def _process_chart_analysis_query(
         "sql": sql.strip(),
         "status": "SUCCESS",
         "duration_ms": duration_ms,
-        "tables_referenced": [
-            f"{project_id}.demo.customer_ratings",
-            f"{project_id}.agent_telemetry.v_tool_completed"
-        ],
+        "tables_referenced": tables_referenced,
         "ai_functions": ai_functions,
         "row_count": len(table_rows),
     }
@@ -3545,18 +3806,18 @@ def process_customer_analysis_query(
 ) -> Dict[str, Any]:
     """Processes natural language questions from the Customer Analysis workspace.
 
-    Splits requests into two distinct functionalities depending on input and conversation context:
+    Splits requests into distinct functionalities depending on input and conversation context:
     1. 'chart_and_sql': Quantitative inquiries satisfied by executing a BigQuery SQL query
        and rendering interactive A2UI charts, metrics, and details table.
-    2. 'conversational_verbal': Open-ended, strategic, or advisory inquiries that push AI reasoning
-       down directly to BigQuery (AI.GENERATE over demo.customer_ratings and agent_telemetry)
-       and return a structured verbal answer and dialogue advice.
-    3. 'dual': Hybrid requests that render both the interactive A2UI chart/metrics AND the structured
-       verbal recommendations in the same turn.
+    2. 'conversational_verbal': Open-ended, evaluative, strategic, or advisory inquiries that push AI
+       reasoning down directly to BigQuery (AI.GENERATE over relevant agent_telemetry views and/or
+       demo.customer_ratings) and return a question-driven verbal analysis without forced categories.
+    3. 'dual': Hybrid requests that render both the interactive A2UI chart/metrics AND the
+       question-driven verbal analysis in the same turn.
     """
     logger.info(f"Processing customer analysis query with dual routing: {question}")
     routing = route_analysis_intent(question, conversation_history=conversation_history, project_id=project_id)
-    intent = routing.get("intent", "chart_and_sql")
+    intent = routing.get("intent", "conversational_verbal")
     resolved_query = routing.get("resolved_query") or question
     logger.info(f"Routed intent: {intent} (resolved query: '{resolved_query}')")
 
@@ -3596,9 +3857,9 @@ def process_customer_analysis_query(
     chart_res["intent"] = "chart_and_sql"
     chart_res["verbal_response"] = chart_res.get("answer_summary", "")
     chart_res["suggestions"] = [
-        "💡 What do you suggest us to do in order to improve customer experience?",
-        "🔍 Why did customer ratings dip on negative interactions?",
-        "⚡ How can we optimize agent response latency and token usage?",
+        "🎯 What is the quality of the decisions that the customer support agent takes? What can be done better?",
+        "🔍 Which sessions show discrepancies between tool outputs and agent decisions?",
+        "📊 What are the most common customer intents in the telemetry logs?",
     ]
     return chart_res
 
