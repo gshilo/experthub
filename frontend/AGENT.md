@@ -7,7 +7,7 @@ The **Frontend Web Application** orchestrates the end-to-end feedback loop demon
 3. Facilitates interactive manual termination ("End conversation") that triggers customer feedback persistence.
 4. Triggers the **Auditor Agent** and renders findings along with generated OKF rules.
 5. Ingests telemetry and CSAT metrics from BigQuery and renders interactive analytics charts using **Chart.js**.
-6. Enforces human-like response sanitization (`_sanitize_human_service_text`) capping customer service agent messages to 2–3 sentences and stripping bolding (`**`) and em/en/double-dashes (`—`, `–`, `--`).
+6. Enforces human-like response sanitization (`_sanitize_human_service_text`) capping customer service agent messages to 2–3 sentences and stripping bolding (`**`) and em/en/double-dashes (`—`, `–`, `--`), while aligning its dynamic service turn fallback (`_generate_dynamic_service_turn_static`) with strict baseline gatekeeping/friction pre-Audit and proactive resolution when Dynamic OKF Directives are active.
 
 ---
 
@@ -80,7 +80,7 @@ These library standards provide comprehensive Cloud Logging capture, OpenTelemet
 
 ## 6. Cloud Run Deployment & Service Configuration
 * **Service Name:** `experthub-frontend`
-* **Active Revision:** `experthub-frontend-00027-jqx`
+* **Active Revision:** `experthub-frontend-00028-zfg`
 * **Live Service URL:** [https://experthub-frontend-537563976049.us-central1.run.app](https://experthub-frontend-537563976049.us-central1.run.app)
 * **Associated Agent Engine IDs:**
   * `CUSTOMER_SERVICE_AGENT_ID`: `2556039354015285248`

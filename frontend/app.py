@@ -785,7 +785,20 @@ def _generate_dynamic_service_turn_static(
     hist_block = "\n".join(history_lines)
 
     okf_context = fetch_okf_dynamic_context().strip()
-    okf_prompt_addition = f"\nActive Dynamic OKF Rules:\n{okf_context}\n" if okf_context else ""
+    if okf_context:
+        okf_prompt_addition = (
+            f"\nActive Dynamic OKF Rules (HIGHEST PRIORITY - supersedes baseline gatekeeping and friction):\n{okf_context}\n"
+        )
+        demeanor_guidelines = (
+            "- Post-Audit Improved Demeanor (OKF Rules Active): Follow the Active Dynamic OKF Rules above immediately. Be constructive, clear, and solution-oriented.\n"
+            "- Proactive Resolution: Do not stonewall or force unnecessary bureaucratic hurdles when an OKF rule applies. Proactively issue RMAs, waive restocking/freight fees on defects or exchanges, schedule technicians, or provide ARN bank release letters to resolve the customer's issue smoothly."
+        )
+    else:
+        okf_prompt_addition = ""
+        demeanor_guidelines = (
+            "- Baseline Demeanor (No OKF Overrides Active): Do NOT be warm, eager, or overly helpful. Avoid apologies or corporate pleasantries. Sound like a dry, strictly procedural support rep who is somewhat unempathetic and enforces company rules by the book, without being abusive or completely refusing to help.\n"
+            "- Strict Gatekeeping & Friction: Do NOT immediately hand out fee waivers or hassle-free approvals on Turn 1 or Turn 2. On early turns, push the burden onto the customer: insist on DIY troubleshooting first, cite the 15% open-box restocking fee and $100-$150 return freight deduction, enforce 48-hour carrier trace waits, and cite 5-7 day bank hold periods. After the customer pushes back across 1-2 turns, do NOT flat-out refuse service; instead, reluctantly provide a conditional, bureaucratic resolution (e.g., schedule a standard technician in 2-3 business days with a non-defect fee warning, issue an RMA subject to the 15% restocking fee or exchange requirement, or open a 48-hour trace ticket) so the issue resolves with noticeable friction."
+        )
 
     prompt = f"""You are a human customer service representative working live support chat for ApexHome & Electro.
 Customer: {cust_name}
@@ -804,8 +817,7 @@ Strict Guidelines:
 - LENGTH LIMIT: Strictly maximum 2 to 3 sentences per response. Never write more than 3 sentences.
 - NO MARKDOWN BOLDING: Absolutely never use '**' for bold text. Write plain text only.
 - NO LONG DASHES: Never use long dashes (em-dash, en-dash, or double hyphens '--'). Use commas or standard periods.
-- Tone & Demeanor: Do not always give the most great, helpful, or overly polite answers. Avoid robotic corporate pleasantries or endless apologies. Real support agents can be blunt, dry, tired, skeptical, or firm.
-- Realistic Conflict: You can get into slight conflict with the customer. Stand firm on store policies (30-day returns, 15% open-box restocking fee, remote diagnostics first, 48-hour carrier traces) and push back if the customer is demanding, unreasonable, or refuses testing.
+{demeanor_guidelines}
 
 Respond directly as support:
 """

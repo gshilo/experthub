@@ -192,9 +192,9 @@ To eliminate conversational rigidity, repetitive dialogues, and rigid script for
 * **Domain & Circumstantial Diversity:** Seeded across 20+ problem categories (firmware handshakes, defrost errors, carrier misdeliveries, pre-auth holds, restocking fees) and high-stakes real-world contexts (sleeping infant during storm, guests arriving in 2 hours, sim racing tournaments).
 * **Variable Pushback:** Customers have distinct patience levels (Low, Moderate, High) and do not concede on turn 1 or 2. They question fees, verify diagnostics, and negotiate alternatives.
 
-### 4. Human-Like Customer Service Communication & Behavioral Realism
+### 4. Human-Like Customer Service Communication & Baseline vs. Post-Audit Behavior
 * **Strict Sentence Limit:** Customer service agent responses are strictly capped at 2 to 3 sentences maximum per turn. No essays, multi-paragraph explanations, or multi-step bulleted lists.
 * **Plain Text Only (Zero Bolding & Long Dashes):** Absolutely zero markdown bolding (`**`) and zero long dashes (`—`, `–`, `--`) in responses. Plain conversational chat text only.
-* **Non-Sycophantic Demeanor:** Replaced artificial, sugary bot cheerfulness and profuse apologies with authentic human customer support tone: matter-of-fact, tired, blunt, skeptical, or firm.
-* **Realistic Conflict & Pushback:** The agent can get into slight conflict with the customer when appropriate. Instead of immediately caving in to angry demands, the agent stands firm on company policy: enforcing the 30-day return window, defending the 15% open-box restocking fee, requiring remote diagnostic triage before authorizing technicians or RMAs, and insisting on the 48-hour carrier trace window for missing deliveries.
+* **Baseline Demeanor & Strict Gatekeeping (Pre-Audit):** When no Dynamic OKF Directives are active, the agent acts like a dry, strictly procedural rep who withholds immediate fee waivers or hassle-free approvals on early turns (even when internal tools output pre-generated RMA codes or waiver notes), insists on DIY troubleshooting first, enforces the 15% open-box restocking fee and 48-hour carrier trace waits, and offers only reluctant, conditional resolutions after customer pushback.
+* **Post-Audit Improvement (OKF Directives Active):** When Dynamic OKF Directives from the Auditor Agent are present on `main`, they supersede baseline gatekeeping and friction, enabling the agent to proactively issue RMAs, waive restocking/freight fees on defects or exchanges, schedule technicians, and resolve issues smoothly.
 

@@ -45,11 +45,11 @@ pydantic>=2.10.0
 * `lookup_billing_and_refund_status(order_id)`: Queries payment authorization holds vs settled charges, warehouse return inspection quarantine status, and credit memo processing.
 * `get_instructions()`: Retrieves the full system instructions for the Customer Service Agent, combining baseline guidelines from `AGENT.md` with active dynamic directives received from the OKF file (`dynamic_context.md`) and strict response style mandates. Exposed as an agent tool and via module export for the frontend "Show instructions" button.
 
-## 6. Response Formatting & Behavioral Realism
+## 6. Response Formatting & Baseline vs. Post-Audit Behavior
 * **Strict Sentence Limit:** Responses are capped at maximum 2 to 3 sentences per turn, matching authentic chat representative pacing.
 * **Plain Text Only:** Zero markdown bolding (`**`) and zero long dashes (`—`, `–`, `--`).
-* **Non-Sycophantic Tone:** Realistic human support demeanor (pragmatic, direct, tired, or firm), avoiding artificial corporate cheerfulness and repetitive apologies.
-* **Realistic Conflict & Pushback:** Stands ground on company policies (30-day return window, 15% open-box restocking fee, remote troubleshooting triage, 48-hour carrier trace), engaging in realistic slight conflict when customers make unreasonable demands.
+* **Baseline Demeanor & Tool Gatekeeping (Pre-Audit):** When no Dynamic OKF Directives are active, the agent uses a dry, strictly procedural tone, withholds immediate tool-generated fee waivers or hassle-free approvals on early turns, insists on DIY troubleshooting first, enforces the 15% open-box restocking fee and 48-hour carrier trace waits, and offers only reluctant, conditional resolutions after customer pushback.
+* **Post-Audit Improvement (OKF Directives Active):** When Dynamic OKF Directives from the Auditor Agent are active on `main`, they supersede baseline gatekeeping and friction so the agent proactively uses tool outputs to resolve customer issues smoothly.
 
 ## 7. Deployment to Vertex AI Agent Engine
 Deploy or redeploy the agent to **Vertex AI Agent Engine** using `deploy.py` (which includes `--otel_to_cloud` by default):

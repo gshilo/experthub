@@ -13,12 +13,36 @@ Resets the state of the system for a fresh demo run:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import Optional, Tuple
+
+
+def _ensure_venv() -> None:
+    """Re-executes the script using the local .venv Python if google-cloud-bigquery is missing."""
+    try:
+        import google.cloud.bigquery  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    if os.environ.get("_EXPERTHUB_VENV_REEXEC") == "1":
+        return
+
+    script_dir = Path(__file__).resolve().parent
+    venv_python = script_dir / ".venv" / "bin" / "python3"
+    if venv_python.is_file() and os.access(venv_python, os.X_OK):
+        env = os.environ.copy()
+        env["_EXPERTHUB_VENV_REEXEC"] = "1"
+        os.execve(str(venv_python), [str(venv_python), *sys.argv], env)
+
+
+_ensure_venv()
 
 
 def get_default_project() -> str:
@@ -74,6 +98,53 @@ def get_deploy_key(project_id: str, secret_id: str = "github-deploy-key") -> Opt
     return None
 
 
+def _truncate_bigquery_via_cli(project_id: str, tables: list, dry_run: bool = False) -> bool:
+    """Fallback to truncate BigQuery tables using the `bq` CLI."""
+    if not shutil.which("bq"):
+        print("[ERROR] Neither google-cloud-bigquery nor `bq` CLI is available.", file=sys.stderr)
+        return False
+
+    success = True
+    for table_name in tables:
+        full_table_id = f"{project_id}.{table_name}"
+        bq_table_spec = f"{project_id}:{table_name}"
+        try:
+            show_res = subprocess.run(
+                ["bq", "show", "--format=json", bq_table_spec],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if show_res.returncode != 0:
+                err = show_res.stderr.strip() or show_res.stdout.strip()
+                raise RuntimeError(f"bq show failed: {err}")
+            table_info = json.loads(show_res.stdout)
+            current_rows = table_info.get("numRows", "unknown")
+            print(f"[*] Table '{full_table_id}': current row count = {current_rows}")
+
+            if dry_run:
+                print(f"    [DRY-RUN] Would execute: TRUNCATE TABLE `{full_table_id}`")
+                continue
+
+            query = f"TRUNCATE TABLE `{full_table_id}`"
+            q_res = subprocess.run(
+                ["bq", f"--project_id={project_id}", "query", "--use_legacy_sql=false", query],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if q_res.returncode != 0:
+                err = q_res.stderr.strip() or q_res.stdout.strip()
+                raise RuntimeError(f"bq query failed: {err}")
+
+            print("    [OK] Truncated successfully via bq CLI.")
+        except Exception as e:
+            print(f"    [ERROR] Failed to truncate table '{full_table_id}': {e}", file=sys.stderr)
+            success = False
+
+    return success
+
+
 def truncate_bigquery_tables(project_id: str, dry_run: bool = False) -> bool:
     """Truncates demo.customer_ratings and agent_telemetry.agent_events."""
     print("\n--- [1/2] BigQuery Table Truncation ---")
@@ -86,8 +157,8 @@ def truncate_bigquery_tables(project_id: str, dry_run: bool = False) -> bool:
         from google.cloud import bigquery
         client = bigquery.Client(project=project_id)
     except ImportError:
-        print("[ERROR] google-cloud-bigquery package not installed. Run in virtual environment (.venv).", file=sys.stderr)
-        return False
+        print("[WARN] google-cloud-bigquery package not installed; falling back to `bq` CLI...", file=sys.stderr)
+        return _truncate_bigquery_via_cli(project_id, tables, dry_run=dry_run)
     except Exception as e:
         print(f"[ERROR] Failed to initialize BigQuery client: {e}", file=sys.stderr)
         return False
