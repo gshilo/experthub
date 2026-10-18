@@ -9,10 +9,13 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 import google.auth
+from google import genai
+from google.genai import types
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
@@ -40,21 +43,32 @@ REPO_NAME = "gshilo/experthub_context"
 OKF_FILENAME = "dynamic_context.md"
 OKF_FALLBACK_FILENAME = "dynamic_content.md"
 
-# Cache for dynamic OKF rules: (cached_text, timestamp)
+# Cache for secrets and dynamic OKF rules
+_SECRET_CACHE: Dict[str, str] = {}
+_BASE_INSTRUCTIONS_CACHE: Optional[str] = None
 _OKF_CACHE: tuple[str, float] = ("", 0.0)
-_OKF_CACHE_TTL = 30.0  # seconds
+_OKF_CACHE_INITIALIZED: bool = False
+_OKF_CACHE_REFRESHING: bool = False
+_OKF_CACHE_LOCK = threading.Lock()
+_OKF_CACHE_TTL = 300.0  # seconds
 
 
 def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
-    """Retrieves secret from Google Cloud Secret Manager with fallback to env var.
+    """Retrieves secret from Google Cloud Secret Manager with in-memory cache and fallback to env var.
 
     API keys and credentials are never stored in static files.
     """
+    cache_key = f"{project}:{secret_id}"
+    if cache_key in _SECRET_CACHE:
+        return _SECRET_CACHE[cache_key]
+
     try:
         client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{project}/secrets/{secret_id}/versions/latest"
         response = client.access_secret_version(request={"name": name})
         secret_value = response.payload.data.decode("UTF-8").strip()
+        if secret_value:
+            _SECRET_CACHE[cache_key] = secret_value
         logger.info(f"Successfully retrieved secret '{secret_id}' directly from Secret Manager.")
         return secret_value
     except Exception as e:
@@ -64,20 +78,23 @@ def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
         )
 
     # Fallback to env var if Secret Manager access fails
+    val = ""
     if secret_id in ("github-pat", SECRET_NAME):
         env_token = os.environ.get("GITHUB_PAT") or os.environ.get("GITHUB_TOKEN")
         if env_token:
-            return env_token.strip()
+            val = env_token.strip()
     elif secret_id in ("github-deploy-key", DEPLOY_KEY_SECRET_NAME):
         env_key = os.environ.get("GITHUB_DEPLOY_KEY") or os.environ.get("SSH_DEPLOY_KEY")
         if env_key:
-            return env_key.strip()
+            val = env_key.strip()
     elif secret_id in ("gemini-api-key", "google-api-key"):
         env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if env_key:
-            return env_key.strip()
+            val = env_key.strip()
 
-    return ""
+    if val:
+        _SECRET_CACHE[cache_key] = val
+    return val
 
 
 def is_placeholder_token(token: str) -> bool:
@@ -99,6 +116,10 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
     Retrieves secret from Google Cloud Secret Manager ('gemini-api-key' or fallback 'google-api-key')
     and populates os.environ dynamically at runtime. The key is never read from or stored in static files.
     """
+    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if existing_key and not is_placeholder_token(existing_key):
+        return existing_key
+
     for secret_name in ("gemini-api-key", "google-api-key"):
         val = get_secret(secret_name, project=project_id)
         if val and not is_placeholder_token(val):
@@ -106,10 +127,6 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
             os.environ["GOOGLE_API_KEY"] = val
             logger.info(f"Dynamically loaded Gemini API key from Secret Manager secret '{secret_name}' (not static files).")
             return val
-
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not is_placeholder_token(existing_key):
-        return existing_key
 
     logger.warning("No Gemini API key found in Secret Manager ('gemini-api-key') or environment.")
     return None
@@ -172,15 +189,8 @@ def fetch_okf_via_git_ssh(private_key_pem: str, repo_name: str = REPO_NAME) -> s
     return content
 
 
-def fetch_okf_dynamic_context() -> str:
-    """Fetches dynamic OKF rules from GitHub repository with 30s TTL cache."""
-    global _OKF_CACHE
-    cached_content, cached_time = _OKF_CACHE
-    now = time.time()
-
-    if cached_content and (now - cached_time) < _OKF_CACHE_TTL:
-        return cached_content
-
+def _fetch_okf_from_remote() -> str:
+    """Performs the actual network fetch of dynamic OKF rules from GitHub."""
     content = ""
 
     # 1. Try SSH Deploy Key
@@ -234,19 +244,69 @@ def fetch_okf_dynamic_context() -> str:
         except Exception as e:
             logger.warning(f"Unable to fetch dynamic OKF context from GitHub: {e}. Using empty/cached fallback.")
 
-    _OKF_CACHE = (content, now)
+    return content
+
+
+def invalidate_okf_cache(refresh_immediately: bool = True) -> str:
+    """Invalidates the cached OKF context (e.g. after an Auditor run) and optionally refreshes it."""
+    global _OKF_CACHE, _OKF_CACHE_INITIALIZED
+    with _OKF_CACHE_LOCK:
+        _OKF_CACHE_INITIALIZED = False
+        _OKF_CACHE = ("", 0.0)
+    if refresh_immediately:
+        return fetch_okf_dynamic_context(force_refresh=True)
+    return ""
+
+
+def fetch_okf_dynamic_context(force_refresh: bool = False) -> str:
+    """Fetches dynamic OKF rules from GitHub repository with TTL cache and background refresh."""
+    global _OKF_CACHE, _OKF_CACHE_INITIALIZED, _OKF_CACHE_REFRESHING
+    cached_content, cached_time = _OKF_CACHE
+    now = time.time()
+
+    if not force_refresh and _OKF_CACHE_INITIALIZED:
+        if (now - cached_time) < _OKF_CACHE_TTL:
+            return cached_content
+        # Stale-while-revalidate: return cached content immediately and refresh in background
+        with _OKF_CACHE_LOCK:
+            if not _OKF_CACHE_REFRESHING:
+                _OKF_CACHE_REFRESHING = True
+
+                def _bg_refresh():
+                    global _OKF_CACHE, _OKF_CACHE_INITIALIZED, _OKF_CACHE_REFRESHING
+                    try:
+                        fresh = _fetch_okf_from_remote()
+                        with _OKF_CACHE_LOCK:
+                            _OKF_CACHE = (fresh if fresh else cached_content, time.time())
+                            _OKF_CACHE_INITIALIZED = True
+                    finally:
+                        with _OKF_CACHE_LOCK:
+                            _OKF_CACHE_REFRESHING = False
+
+                threading.Thread(target=_bg_refresh, daemon=True).start()
+        return cached_content
+
+    content = _fetch_okf_from_remote()
+    with _OKF_CACHE_LOCK:
+        _OKF_CACHE = (content, time.time())
+        _OKF_CACHE_INITIALIZED = True
     return content
 
 
 def get_base_instructions() -> str:
-    """Reads base system instructions from local AGENT.md."""
+    """Reads base system instructions from local AGENT.md with in-memory caching."""
+    global _BASE_INSTRUCTIONS_CACHE
+    if _BASE_INSTRUCTIONS_CACHE is not None:
+        return _BASE_INSTRUCTIONS_CACHE
     agent_md_path = pathlib.Path(__file__).parent / "AGENT.md"
     if agent_md_path.exists():
-        return agent_md_path.read_text(encoding="utf-8")
-    return (
+        _BASE_INSTRUCTIONS_CACHE = agent_md_path.read_text(encoding="utf-8")
+        return _BASE_INSTRUCTIONS_CACHE
+    _BASE_INSTRUCTIONS_CACHE = (
         "You are the Lead Customer Support AI Specialist for ApexHome & Electro. "
         "Help customers with electronics and home appliances professionally and concisely."
     )
+    return _BASE_INSTRUCTIONS_CACHE
 
 
 def dynamic_instruction_provider(context: Optional[CallbackContext] = None) -> str:
@@ -706,6 +766,10 @@ root_agent = Agent(
     name="customer_service_agent",
     description="Customer Support Specialist for electronics and home appliances.",
     model="gemini-3.8-flash",
+    generate_content_config=types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        temperature=0.7,
+    ),
     instruction=dynamic_instruction_provider,
     tools=[
         check_order_status,
