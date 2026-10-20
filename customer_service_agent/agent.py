@@ -50,7 +50,7 @@ _OKF_CACHE: tuple[str, float] = ("", 0.0)
 _OKF_CACHE_INITIALIZED: bool = False
 _OKF_CACHE_REFRESHING: bool = False
 _OKF_CACHE_LOCK = threading.Lock()
-_OKF_CACHE_TTL = 300.0  # seconds
+_OKF_CACHE_TTL = 120.0  # seconds (2 minutes)
 
 
 def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
