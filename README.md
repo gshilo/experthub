@@ -45,7 +45,7 @@ flowchart TD
 
     CSAgent -->|"Fetches Dynamic Key & SSH Key"| SecretMgr
     CustAgent -->|"Fetches Dynamic Key"| SecretMgr
-    CSAgent -->|"Pulls Dynamic Rules (30s TTL)"| OKFFile
+    CSAgent -->|"Pulls Dynamic Rules (2m TTL)"| OKFFile
 ```
 
 ---
@@ -83,7 +83,7 @@ flowchart TD
      * **Incremental Update:** If `dynamic_context.md` already exists, the agent makes changes **ONLY** to the file in the `new_version` branch. All existing rules are preserved and newly formulated rules are appended.
      * **Human Review Gate:** Changes remain isolated in `new_version` branch. After human review of the changes, the new version will be merged by a human into the `main` branch.
 5. **Immediate Dynamic Injection:**
-   * On subsequent conversation turns, the Customer Service Agent retrieves the approved `dynamic_context.md` from `main` (via a 30s TTL cache) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
+   * On subsequent conversation turns, the Customer Service Agent retrieves the approved `dynamic_context.md` from `main` (via a 2-minute TTL cache) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
 6. **Analytics Dashboard:**
    * The user navigates to **Tab 2** (Visualization & Telemetry Analytics Dashboard) to observe real-time CSAT distributions (1 to 5 stars), response latency trends over time, token consumption over time (prompt, completion, and total tokens), tool usage breakdowns, and turn-by-turn token consumption.
 

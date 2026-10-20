@@ -33,7 +33,7 @@ pydantic>=2.10.0
 * **Access Token Retrieval:** Fetches the GitHub Personal Access Token at runtime from **Google Cloud Secret Manager** (`github-pat`).
 * **Source Repository:** [`https://github.com/gshilo/experthub_context.git`](https://github.com/gshilo/experthub_context.git) (`main` branch).
 * **Target File:** `dynamic_context.md` (with fallback to `dynamic_content.md`).
-* **Caching Strategy:** 30-second TTL in-memory cache to ensure low per-turn latency while immediately picking up newly committed rules from the Auditor Agent without agent restarts.
+* **Caching Strategy:** 2-minute (120-second) TTL in-memory cache to ensure low per-turn latency while quickly picking up newly committed rules from the Auditor Agent without agent restarts.
 * **Fallback Behavior:** Gracefully falls back to baseline operational policies if GitHub or Secret Manager is temporarily inaccessible.
 
 ## 5. Tools & Operational Policies
