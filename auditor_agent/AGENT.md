@@ -18,23 +18,19 @@ The Auditor operates with an **In-Database BigQuery AI Pushdown Architecture**:
 
 ---
 
-## 2. Dynamic Context GitHub Interaction Protocol
-When interacting with the dynamic context file (`dynamic_context.md`) in GitHub repository `https://github.com/gshilo/experthub_context.git`, you MUST adhere strictly to the following rules:
+## 2. Dynamic Context Cloud Storage Interaction Protocol
+When interacting with the dynamic context file (`dynamic_context.md`) in Google Cloud Storage bucket `instructions91`, you MUST adhere strictly to the following rules:
 
-1. **Initial File Creation on Main Branch:**
-   * If the dynamic context file (`dynamic_context.md`) is missing in the `main` branch, create it directly in the `main` branch dynamically from current BigQuery AI findings conforming to OKF v0.2.
-   * Commit and push the file to `main`: `git push -u origin main`.
+1. **Bucket Management:**
+   * OKF rules are saved to and read from Google Cloud Storage bucket `instructions91`.
+   * If the bucket does not exist, create it automatically in multi-region `US`.
 
-2. **Incremental Rule Updates on new_version Branch:**
-   * If the file already exists in the `main` branch, make changes **ONLY** to the file in the `new_version` branch.
-   * **Rule Retention & Legacy Purge:** Genuinely data-backed dynamic rules are retained intact. Known legacy static templates are automatically purged.
-   * **Semantic Additive Updates:** Add only newly identified rules to the file. Deduplicate candidate policies and directives against existing rules using semantic token overlap, appending only genuinely new rules.
-   * Commit and push changes exclusively to the `new_version` branch: `git push -u origin new_version`.
-
-3. **Human Review & Merge Gate:**
-   * Changes made to `new_version` remain isolated on the `new_version` branch awaiting human review.
-   * After human review of the changes, the new version will be merged by a human into the `main` branch.
-   * Live customer service interactions pull approved dynamic context exclusively from `main`.
+2. **Direct Overwrite with Rule Merging:**
+   * Read existing rules from `gs://instructions91/dynamic_context.md` if the object exists.
+   * **Rule Retention:** Genuinely data-backed dynamic rules are retained intact. Known legacy static templates are automatically purged.
+   * **Semantic Additive Updates:** Add newly identified rules to the file. Deduplicate candidate policies and directives against existing rules using semantic token overlap, appending only genuinely new rules.
+   * Write the merged OKF rules directly back to `gs://instructions91/dynamic_context.md`.
+   * Live customer service interactions pull active dynamic context directly from `gs://instructions91/dynamic_context.md`.
 
 ---
 

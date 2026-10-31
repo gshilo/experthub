@@ -25,9 +25,9 @@ flowchart TD
     end
 
     subgraph Knowledge["Open Knowledge Format (OKF) & Security"]
-        GitHubRepo["GitHub Context Repo<br/>(experthub_context.git)"]
+        GCSBucket["Cloud Storage Bucket<br/>(instructions91)"]
         OKFFile["dynamic_context.md<br/>(OKF v0.2 Rules)"]
-        SecretMgr["Cloud Secret Manager<br/>(gemini-api-key, github-deploy-key, github-pat)"]
+        SecretMgr["Cloud Secret Manager<br/>(gemini-api-key)"]
     end
 
     CloudRun <-->|"Orchestrates Turns (2-5s Delay)"| CustAgent
@@ -77,13 +77,12 @@ flowchart TD
      * *Telemetry & Feedback Analyzer Sub-Agent:* Detects real customer complaints (restocking fee surprises, delivery trace delays, repetitive diagnostics).
      * *Token Efficiency Optimizer Sub-Agent:* Devises prompt and completion token compression directives (-32% savings) focused on consolidating multi-turn diagnostics and disclosing return conditions upfront.
      * *OKF Rule Author Sub-Agent:* Formulates valid **Open Knowledge Format (OKF v0.2)** directives.
-4. **Self-Improving Dynamic Context Update & Branch Lifecycle:**
-   * The Auditor interacts with `https://github.com/gshilo/experthub_context.git` using Cloud Secret Manager credentials (`github-deploy-key` or `github-pat`):
-     * **Initial Creation:** If `dynamic_context.md` is missing in the `main` branch, the Auditor Agent creates it directly in `main`.
-     * **Incremental Update:** If `dynamic_context.md` already exists, the agent makes changes **ONLY** to the file in the `new_version` branch. All existing rules are preserved and newly formulated rules are appended.
-     * **Human Review Gate:** Changes remain isolated in `new_version` branch. After human review of the changes, the new version will be merged by a human into the `main` branch.
+4. **Self-Improving Dynamic Context Update & Storage Lifecycle:**
+   * The Auditor persists rules to Google Cloud Storage bucket `instructions91` (`US` multi-region):
+     * **Bucket Auto-Provisioning:** If bucket `instructions91` does not exist, it is created automatically.
+     * **Direct Rule Merging:** The Auditor reads existing rules from `gs://instructions91/dynamic_context.md`, appends newly formulated policies and directives, and saves the file directly.
 5. **Immediate Dynamic Injection:**
-   * On subsequent conversation turns, the Customer Service Agent retrieves the approved `dynamic_context.md` from `main` (via a 2-minute TTL cache) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
+   * On subsequent conversation turns, the Customer Service Agent retrieves `dynamic_context.md` from `gs://instructions91` (via TTL caching) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
 6. **Analytics Dashboard:**
    * The user navigates to **Tab 2** (Visualization & Telemetry Analytics Dashboard) to observe real-time CSAT distributions (1 to 5 stars), response latency trends over time, token consumption over time (prompt, completion, and total tokens), tool usage breakdowns, and turn-by-turn token consumption.
 
@@ -320,13 +319,14 @@ python3 reset_demo_state.py -y
 # Reset ONLY BigQuery tables
 python3 reset_demo_state.py --bq-only -y
 
-# Reset ONLY Git context repository
-python3 reset_demo_state.py --git-only -y
+# Reset ONLY Cloud Storage OKF dynamic context
+python3 reset_demo_state.py --storage-only -y
 ```
 
 This utility supports:
 1. **BigQuery Truncation (`--bq-only` or default):** Truncates BigQuery tables `demo.customer_ratings` and `agent_telemetry.agent_events` (preserving schema, clustering, and partitioning).
-2. **Git Context Reset (`--git-only` or default):** Clones `https://github.com/gshilo/experthub_context.git` using Secret Manager deploy key `github-deploy-key`, deletes all files from branch `new_version`, merges `new_version` into `main`, and pushes both branches to `origin`.
+2. **Cloud Storage Context Reset (`--storage-only` or default):** Deletes `dynamic_context.md` from Google Cloud Storage bucket `instructions91` to restore the agent to baseline demeanor.
+3. **Legacy Git Context Reset (`--git-only`):** Optional flag to clear legacy Git repository context branches.
 
 
 

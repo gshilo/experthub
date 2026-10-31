@@ -2154,41 +2154,28 @@
         });
 
         const statsEl = document.getElementById('auditor-stats');
-        if (report.github_commit_success) {
+        const syncSuccess = report.storage_sync_success ?? report.github_commit_success;
+        const syncStatus = report.storage_sync_status ?? report.github_commit_status ?? '';
+        const bucketName = report.target_bucket || 'instructions91';
+        if (syncSuccess) {
           statsEl.innerHTML = `
             <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="color: #34d399; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                <span>✅</span> <span>GitHub Sync Active</span>
-                <span class="badge" style="background: rgba(59, 130, 246, 0.25); color: #93c5fd; font-size: 0.75rem;">Branch: ${report.target_branch || 'main'}</span>
-                ${report.target_branch === 'new_version' ? '<span class="badge" style="background: rgba(245, 158, 11, 0.25); color: #fbbf24; font-size: 0.75rem;">Awaiting Human Review</span>' : '<span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 0.75rem;">Main Production</span>'}
+                <span>✅</span> <span>Cloud Storage Sync Active</span>
+                <span class="badge" style="background: rgba(59, 130, 246, 0.25); color: #93c5fd; font-size: 0.75rem;">Bucket: ${bucketName}</span>
+                <span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 0.75rem;">Production Direct</span>
                 <span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; margin-left: auto;">${report.estimated_token_savings} Token Savings</span>
               </div>
-              <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 0.25rem;">${report.github_commit_status}</div>
+              <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 0.25rem;">${syncStatus}</div>
             </div>`;
         } else {
-          const isDeployKeyNotice = (report.github_commit_status || '').includes('deploy key') || (report.github_commit_status || '').includes('publickey');
           statsEl.innerHTML = `
             <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="color: #fbbf24; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
-                <span>⚠️</span> <span>${isDeployKeyNotice ? 'Deploy Key Configuration Required' : 'GitHub Sync Notice'}</span>
+                <span>⚠️</span> <span>Cloud Storage Sync Notice</span>
                 <span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; margin-left: auto;">${report.estimated_token_savings} Token Savings</span>
               </div>
-              <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 0.25rem; line-height: 1.4;">${report.github_commit_status}</div>
-              ${isDeployKeyNotice ? `
-                <div style="margin-top: 0.5rem; background: rgba(0,0,0,0.35); border-radius: 4px; padding: 0.5rem 0.6rem; font-size: 0.75rem; color: #e2e8f0; line-height: 1.5;">
-                  <div style="color: #93c5fd; font-weight: 600; margin-bottom: 0.25rem;">
-                    Action required by repo owner: Go to <a href="https://github.com/gshilo/experthub_context/settings/keys/new" target="_blank" style="color: #60a5fa; text-decoration: underline; font-weight: bold;">GitHub &gt; Repo Settings &gt; Deploy keys &gt; Add deploy key</a> (check <strong>"Allow write access"</strong>):
-                  </div>
-                  <div style="position: relative; margin-top: 0.35rem;">
-                    <code id="deploy-key-code" style="display: block; background: #0f172a; padding: 0.4rem 3.8rem 0.4rem 0.4rem; border-radius: 3px; color: #a5f3fc; font-family: monospace; word-break: break-all; user-select: all;">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIuAUjaTWaFizhIgxqp9HbnqRIRmaLVct+ZTXZY/a2ir experthub-auditor-deploy-key</code>
-                    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('deploy-key-code').innerText.trim()); this.innerText='Copied!';" style="position: absolute; right: 4px; top: 4px; font-size: 0.7rem; background: #2563eb; color: #fff; border: none; border-radius: 3px; padding: 2px 6px; cursor: pointer;">Copy</button>
-                  </div>
-                </div>
-              ` : `
-                <div style="margin-top: 0.4rem; background: rgba(0,0,0,0.3); border-radius: 4px; padding: 0.35rem 0.5rem; font-family: monospace; font-size: 0.75rem; color: #93c5fd; word-break: break-all;">
-                  echo -n 'ghp_YOUR_TOKEN' | gcloud secrets versions add github-pat --data-file=-
-                </div>
-              `}
+              <div style="color: #cbd5e1; font-size: 0.8rem; margin-top: 0.25rem; line-height: 1.4;">${syncStatus}</div>
             </div>`;
         }
         document.getElementById('auditor-okf-text').innerText = report.okf_rule_block;
