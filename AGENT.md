@@ -29,8 +29,8 @@ ExpertHub is a closed-loop, self-improving multi-agent system built on the **Goo
                                    │
                                    ▼
          ┌─────────────────────────────────────────────────────┐
-         │      Dynamic OKF Rules via GitHub Repository        │
-         │   (main = production rules; new_version = review)   │
+         │ Dynamic OKF Rules in Cloud Storage (instructions91) │
+         │               (dynamic_context.md)                  │
          └─────────────────────────────────────────────────────┘
 ```
 
@@ -53,8 +53,6 @@ In accordance with Google Cloud enterprise security best practices:
 | :--- | :--- | :--- | :--- |
 | `gemini-api-key` | `latest` (v1) | Gemini API Key for model inference (`gemini-3.8-flash`) | Customer Service, Customer, Auditor, Frontend |
 | `google-api-key` | `latest` (v1) | Compatibility alias for Google GenAI SDK | Customer Service, Customer, Auditor, Frontend |
-| `github-deploy-key` | `latest` (v1) | Ed25519 SSH Deploy Key for Git read/write operations | Auditor Agent, Customer Service Agent |
-| `github-pat` | `latest` (v1) | GitHub Personal Access Token (REST API fallback) | Auditor Agent, Customer Service Agent |
 
 ### Dynamic Runtime Key Resolution (`ensure_gemini_api_key`)
 At application and agent startup, each component invokes `ensure_gemini_api_key(project_id)`:
@@ -65,21 +63,21 @@ At application and agent startup, each component invokes `ensure_gemini_api_key(
 
 ---
 
-## 3. Dynamic Context & GitHub Branch Lifecycle
+## 3. Dynamic Context & Google Cloud Storage Lifecycle
 
-The system self-improves by maintaining an Open Knowledge Format (OKF v0.2) document (`dynamic_context.md`) in the GitHub repository `https://github.com/gshilo/experthub_context.git`.
+The system self-improves by maintaining an Open Knowledge Format (OKF v0.2) document (`dynamic_context.md`) in Google Cloud Storage bucket `instructions91` (`US` multi-region).
 
-### GitHub Interaction Protocol:
-1. **Initial File Creation on `main` Branch:**
-   * If `dynamic_context.md` is missing from the `main` branch, the Auditor Agent initializes the file directly on `main` with baseline operational policies and token directives.
-2. **Incremental Updates on `new_version` Branch:**
-   * If `dynamic_context.md` already exists on `main`, the Auditor Agent makes changes **ONLY** to the file on the `new_version` branch.
-   * **Rule Retention:** All existing rules are strictly preserved; no existing policies or directives are removed or overwritten.
-   * **Additive Expansion:** Only newly formulated policies and directives are appended.
-3. **Human Review & Merge Gate:**
-   * Changes on `new_version` remain isolated pending human review and approval.
-   * After human verification, changes are merged into `main` by an authorized operator.
-   * The Customer Service Agent consumes dynamic context strictly from the `main` branch in production.
+### Storage & Dynamic Loading Protocol:
+1. **Bucket Creation on First Load:**
+   * If the bucket `instructions91` does not exist on the Customer Service Agent's first dynamic context load, it is created automatically.
+   * If the Auditor Agent runs before the Customer Service Agent has initialized the bucket, the Auditor Agent also creates it automatically.
+2. **Direct Overwrite with Rule Merging:**
+   * The Auditor Agent reads existing OKF rules from `gs://instructions91/dynamic_context.md` (if present).
+   * Formulates new operational rules based on BigQuery feedback and telemetry analysis, deduplicating candidate rules against existing policies.
+   * Merges and appends newly formulated policies and directives directly into `gs://instructions91/dynamic_context.md`.
+3. **Live Context Consumption:**
+   * The Customer Service Agent retrieves dynamic directives from `gs://instructions91/dynamic_context.md` with TTL caching.
+   * When dynamic rules are present, they supersede baseline friction and gatekeeping. If the file is not yet populated, the agent uses its baseline demeanor.
 
 ---
 

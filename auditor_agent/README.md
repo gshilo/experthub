@@ -16,11 +16,10 @@ The Auditor coordinates three specialized sub-agents with an **In-Database BigQu
    * Generates formal YAML + Markdown rules strictly conforming to the **Open Knowledge Format (OKF v0.2)** specification.
    * **100% Dynamic Rule Formulation:** Formulates rules dynamically based purely on current telemetry and customer feedback findings. Zero hardcoded rule templates.
    * **Legacy Rule Scrubbing & Deduplication:** Automatically purges any legacy static rules and deduplicates candidate rules using semantic token similarity.
-   * Accesses GitHub credentials securely from **Google Cloud Secret Manager** (SSH deploy key `github-deploy-key` or PAT `github-pat`).
-   * **Branch Interaction Rules:**
-     * If `dynamic_context.md` is missing in `main` branch, creates it directly on `main`.
-     * If `dynamic_context.md` already exists, makes changes **ONLY** to the file in `new_version` branch, preserving existing rules and only adding new rules to the file.
-     * Changes remain in `new_version` branch until reviewed by a human and merged into `main`.
+   * Saves rules directly to Google Cloud Storage bucket `instructions91` (`US` multi-region).
+   * **Direct Storage Rules:**
+     * If bucket `instructions91` is missing, creates it automatically.
+     * Merges newly generated rules into any existing `dynamic_context.md` in the bucket and saves directly to `gs://instructions91/dynamic_context.md`.
 
 ## 3. Audit Report Output Schema
 Each invocation returns a structured report containing:
@@ -28,10 +27,11 @@ Each invocation returns a structured report containing:
 * `average_rating`: Mean score across analyzed sessions.
 * `token_recommendations`: Actionable prompt compression directives.
 * `estimated_token_savings`: Estimated percentage savings.
-* `okf_rule_block`: The exact OKF Markdown text synchronized to GitHub.
-* `github_commit_status`: Confirmation of the GitHub commit SHA or status message.
-* `target_branch`: Target branch name (`main` or `new_version`).
-* `workflow_state`: Workflow status (`CREATED_IN_MAIN` or `AWAITING_HUMAN_REVIEW_ON_NEW_VERSION`).
+* `okf_rule_block`: The exact OKF Markdown text saved to Cloud Storage.
+* `storage_sync_status`: Status message of the Cloud Storage update.
+* `storage_sync_success`: Boolean indicating whether the Cloud Storage sync succeeded.
+* `target_bucket`: Name of the GCS bucket (`instructions91`).
+* `object_path`: Full Cloud Storage object path (`gs://instructions91/dynamic_context.md`).
 
 ## 4. Dependencies, Telemetry & Agent Engine Observability
 In order to enable logging, telemetry, and Observability settings in Vertex AI Agent Engine, ensure all agents are using:

@@ -20,18 +20,19 @@ The simulation loop continues until **any** of the following conditions is satis
 3. **Session Timeout:** Elapsed time exceeds **5 minutes** (300 seconds).
 4. **User Abort:** The user clicks the **"End conversation"** button in the web UI.
 
-## 4. BigQuery Ratings Persistence (`demo.customer_ratings`)
-Upon chat completion, the customer evaluates the conversation from their persona's viewpoint and writes a row to BigQuery:
-* **Dataset:** `demo`
+## 4. AlloyDB Ratings Persistence (`apex.customer_ratings`)
+Upon chat completion, the customer evaluates the conversation from their persona's viewpoint and writes a row to AlloyDB via the AlloyDB Python Connector + IAM Database Authentication over Private Service Connect (PSC):
+* **Cluster / Instance:** `apex` (`us-central1`)
+* **Database:** `apex`
 * **Table:** `customer_ratings`
 * **Exact Schema:**
-  * `customer_id`: `INTEGER` (Unique identifier)
-  * `customer_name`: `STRING` (Customer's full name)
+  * `customer_id`: `BIGINT` / `INTEGER` (Unique identifier)
+  * `customer_name`: `TEXT` / `STRING` (Customer's full name)
   * `rating`: `INTEGER` (1 to 5 scale)
-  * `description`: `STRING` (Concise qualitative feedback explaining the score)
-  * `timestamp`: `TIMESTAMP` (ISO 8601 UTC timestamp of rating submission)
+  * `description`: `TEXT` / `STRING` (Concise qualitative feedback explaining the score)
+  * `timestamp`: `TIMESTAMPTZ` / `TIMESTAMP` (ISO 8601 UTC timestamp of rating submission)
 
-Because personas and complaints are generated live with wide topical variety, the BigQuery ratings dataset receives a continuously diverse spectrum of feedback, enabling the **Auditor Agent** to discover diverse friction patterns and synthesize novel OKF operational rules.
+Because personas and complaints are generated live with wide topical variety, the AlloyDB ratings table receives a continuously diverse spectrum of feedback, enabling the **Auditor Agent** to discover diverse friction patterns and synthesize novel OKF operational rules.
 
 ## 5. Dependencies, Telemetry & Agent Engine Observability
 In order to enable logging, telemetry, and Observability settings in Vertex AI Agent Engine, ensure all agents are using:
@@ -45,6 +46,8 @@ These version constraints ensure runtime execution tracing, OpenTelemetry Cloud 
 google-cloud-aiplatform[agent_engines]>=1.126.1
 google-adk>=1.18.0
 google-genai>=1.0.0
+google-cloud-alloydb-connector[pg8000]>=1.4.0
+pg8000>=1.31.2
 google-cloud-bigquery>=3.46.0
 google-cloud-bigquery-storage>=2.42.0
 google-cloud-secret-manager>=2.31.0

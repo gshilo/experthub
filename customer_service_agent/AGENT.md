@@ -51,9 +51,9 @@ Your internal lookup tools (`initiate_return`, `lookup_warranty_policy`, `lookup
 ---
 
 ## 4. Self-Improving Dynamic Context (OKF Integration)
-Before generating any response, the agent merges dynamic policies retrieved from the Open Knowledge Format (dynamic_context.md from the main branch of GitHub repository https://github.com/gshilo/experthub_context.git).
+Before generating any response, the agent merges dynamic policies retrieved from the Open Knowledge Format (`dynamic_context.md` from Google Cloud Storage bucket `instructions91`). If this bucket does not exist on the first dynamic context load, the Customer Service Agent creates it automatically.
 
-* Production Source of Truth: Live customer conversations strictly consume approved dynamic context from the main branch. New candidate rules formulated on the new_version branch are kept in branch isolation until reviewed by a human and merged into main.
+* Production Source of Truth: Live customer conversations consume active dynamic context from `gs://instructions91/dynamic_context.md`. If the bucket or file is not yet populated, the agent uses its baseline demeanor until the Auditor Agent generates OKF rules.
 
 ### Precedence Hierarchy:
 1. Dynamic OKF Directives (dynamic_context.md): HIGHEST PRIORITY. Completely overrides and replaces conflicting baseline policies, tool gatekeeping, and baseline demeanor. When Dynamic OKF Directives are present, follow them immediately and proactively resolve the customer's issue without bureaucratic pushback.

@@ -81,6 +81,7 @@ try:
         generate_customer_persona,
         generate_customer_turn,
         evaluate_customer_experience,
+        write_customer_rating_to_alloydb,
         write_customer_rating_to_bigquery,
     )
 except Exception as e:
@@ -245,7 +246,7 @@ except Exception as e:
     def _procedural_fallback_persona(category_hint: str = "") -> Dict[str, Any]:
         return generate_customer_persona()
 
-    def write_customer_rating_to_bigquery(
+    def write_customer_rating_to_alloydb(
         customer_id: int,
         customer_name: str,
         rating: int,
@@ -256,6 +257,8 @@ except Exception as e:
         ts = timestamp or datetime.now(timezone.utc).isoformat()
         logger.info(f"[Fallback] Recorded rating ({rating}/5) for {customer_name} at {ts}: {description}")
         return True
+
+    write_customer_rating_to_bigquery = write_customer_rating_to_alloydb
 
     def generate_customer_turn(
         history: List[Dict[str, str]],
@@ -583,10 +586,14 @@ UNNEST([AI.GENERATE(
             ],
             "estimated_token_savings": "28%",
             "okf_rule_block": "---\ntype: Operational Rule\ntitle: Electronics Support Token Directives\nstatus: stable\n---\n- [Based on: Agent Metrics] Direct answers only\n- [Based on: Agent Metrics] Under 45 words per diagnosis",
-            "github_commit_status": "Committed to dynamic_context.md",
+            "github_commit_status": "Synced to gs://instructions91/dynamic_context.md",
             "github_commit_success": True,
-            "target_branch": "new_version",
-            "workflow_state": "AWAITING_HUMAN_REVIEW_ON_NEW_VERSION",
+            "storage_sync_status": "Synced to gs://instructions91/dynamic_context.md",
+            "storage_sync_success": True,
+            "target_bucket": "instructions91",
+            "object_path": "gs://instructions91/dynamic_context.md",
+            "target_branch": "instructions91",
+            "workflow_state": "ACTIVE_IN_GCS",
             "queries": get_default_audit_queries(PROJECT_ID),
         }
 
@@ -1574,7 +1581,7 @@ class SimulationSession:
 
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
-                write_customer_rating_to_bigquery(
+                write_customer_rating_to_alloydb(
                     customer_id=cust_id,
                     customer_name=cust_name,
                     rating=rating,
@@ -1582,8 +1589,8 @@ class SimulationSession:
                     timestamp=now_iso,
                     project_id=PROJECT_ID,
                 )
-            except Exception as bq_err:
-                logger.warning(f"BigQuery rating persistence note: {bq_err}")
+            except Exception as db_err:
+                logger.warning(f"AlloyDB rating persistence note: {db_err}")
 
             self.emit(
                 "rating",

@@ -29,12 +29,12 @@ requests>=2.32.0
 pydantic>=2.10.0
 ```
 
-## 4. Self-Improving Dynamic Context (GitHub OKF Integration)
-* **Access Token Retrieval:** Fetches the GitHub Personal Access Token at runtime from **Google Cloud Secret Manager** (`github-pat`).
-* **Source Repository:** [`https://github.com/gshilo/experthub_context.git`](https://github.com/gshilo/experthub_context.git) (`main` branch).
-* **Target File:** `dynamic_context.md` (with fallback to `dynamic_content.md`).
-* **Caching Strategy:** 2-minute (120-second) TTL in-memory cache to ensure low per-turn latency while quickly picking up newly committed rules from the Auditor Agent without agent restarts.
-* **Fallback Behavior:** Gracefully falls back to baseline operational policies if GitHub or Secret Manager is temporarily inaccessible.
+## 4. Self-Improving Dynamic Context (Google Cloud Storage OKF Integration)
+* **Storage Location:** Google Cloud Storage bucket `instructions91` (`US` multi-region).
+* **Target Object:** `dynamic_context.md`.
+* **Automatic Provisioning:** If the bucket `instructions91` does not exist on the first dynamic context load, the Customer Service Agent creates it automatically.
+* **Caching Strategy:** 2-minute (120-second) TTL in-memory cache with stale-while-revalidate background refresh to ensure ultra-low per-turn latency while quickly picking up newly saved rules from the Auditor Agent without agent restarts.
+* **Fallback Behavior:** Gracefully falls back to baseline operational policies if the storage bucket or object is empty or temporarily inaccessible.
 
 ## 5. Tools & Operational Policies
 * `register_customer_order(order_id, customer_name, product, category, issue, ...)`: Dynamically registers runtime-generated customer orders and arbitrary appliances into the in-memory order registry so support tools seamlessly resolve dynamically synthesized customer inquiries without order or catalog deadlocks.

@@ -23,6 +23,7 @@ from google.adk.agents import Agent
 from google.adk.apps import App
 from google.cloud import bigquery
 from google.cloud import secretmanager
+from google.cloud import storage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +35,8 @@ PROJECT_ID = (
     or "experthub-510907"
 )
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
+OKF_BUCKET_NAME = os.environ.get("OKF_BUCKET_NAME", "instructions91")
+OKF_BUCKET_LOCATION = os.environ.get("OKF_BUCKET_LOCATION", "US")
 DEPLOY_KEY_SECRET_NAME = os.environ.get("GITHUB_DEPLOY_KEY_SECRET_NAME", "github-deploy-key")
 SECRET_NAME = os.environ.get("GITHUB_SECRET_NAME", "github-pat")
 REPO_NAME = "gshilo/experthub_context"
@@ -1308,123 +1311,51 @@ def is_placeholder_token(token: str) -> bool:
     )
 
 
-def sync_okf_via_git_ssh(
+def ensure_okf_bucket(
+    bucket_name: str = OKF_BUCKET_NAME,
+    project_id: str = PROJECT_ID,
+    location: str = OKF_BUCKET_LOCATION,
+) -> storage.Bucket:
+    """Ensures that the Google Cloud Storage bucket exists; creates it in location 'US' if missing."""
+    client = storage.Client(project=project_id)
+    bucket = client.bucket(bucket_name)
+    if not bucket.exists():
+        try:
+            logger.info(f"GCS bucket '{bucket_name}' not found. Creating bucket in location '{location}'...")
+            bucket = client.create_bucket(bucket, location=location)
+            logger.info(f"Successfully created GCS bucket '{bucket_name}' in '{location}'.")
+        except Exception as e:
+            if "Conflict" in str(e) or "409" in str(e) or "Already Exists" in str(e):
+                logger.info(f"Bucket '{bucket_name}' was already created concurrently.")
+                bucket = client.bucket(bucket_name)
+            else:
+                logger.error(f"Failed to create GCS bucket '{bucket_name}': {e}")
+                raise
+    return bucket
+
+
+def sync_okf_rules_to_gcs(
     analysis: Dict[str, Any],
     token_opt: Dict[str, Any],
-    private_key_pem: str,
-    repo_name: str = REPO_NAME,
+    bucket_name: str = OKF_BUCKET_NAME,
     filename: str = OKF_FILENAME,
+    project_id: str = PROJECT_ID,
 ) -> Tuple[bool, str, str, str]:
-    """Interacts with dynamic context file on GitHub using SSH Deploy Key.
-
-    All new or updated OKF rules created by the Auditor Agent are strictly
-    committed to the 'new_version' branch and await human review before merge into main.
-    Only ONE dynamic context file (dynamic_context.md) is created or modified.
+    """Reads existing OKF rules from Google Cloud Storage bucket, merges new rules, and writes back directly.
 
     Returns:
-        (success, status_message, final_content, target_branch)
+        (success, status_message, final_content, bucket_name)
     """
-    temp_dir = tempfile.mkdtemp(prefix="okf_git_")
-    key_path = os.path.join(temp_dir, "id_ed25519")
-    repo_dir = os.path.join(temp_dir, "repo")
-
     try:
-        with open(key_path, "w", encoding="utf-8") as f:
-            f.write(private_key_pem.strip() + "\n")
-        os.chmod(key_path, 0o600)
-
-        git_ssh_cmd = (
-            f"ssh -i {key_path} "
-            "-o IdentitiesOnly=yes "
-            "-o BatchMode=yes "
-            "-o StrictHostKeyChecking=no "
-            "-o UserKnownHostsFile=/dev/null "
-            "-o ConnectTimeout=10 "
-            "-o LogLevel=ERROR"
-        )
-        env = os.environ.copy()
-        env["GIT_SSH_COMMAND"] = git_ssh_cmd
-        env["SSH_AUTH_SOCK"] = ""
-        env["GIT_AUTHOR_NAME"] = "ExpertHub Auditor Agent"
-        env["GIT_AUTHOR_EMAIL"] = "auditor@experthub.local"
-        env["GIT_COMMITTER_NAME"] = "ExpertHub Auditor Agent"
-        env["GIT_COMMITTER_EMAIL"] = "auditor@experthub.local"
-
-        repo_url = f"git@github.com:{repo_name}.git"
-        logger.info(f"Attempting git clone from {repo_url} via deploy key...")
-
-        clone_res = subprocess.run(
-            ["git", "clone", repo_url, repo_dir],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=30,
-        )
-
-        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        if clone_res.returncode != 0:
-            stderr_out = clone_res.stderr.strip()
-            if "Permission denied (publickey)" in stderr_out:
-                msg = (
-                    "SSH Permission denied (publickey): The deploy key is not added to "
-                    f"https://github.com/{repo_name}/settings/keys with 'Allow write access'."
-                )
-                logger.error(msg)
-                return False, msg, "", NEW_VERSION_BRANCH
-            elif "Repository not found" in stderr_out or "does not exist" in stderr_out:
-                msg = (
-                    f"Repository '{repo_name}' not found on GitHub. "
-                    f"Ensure https://github.com/{repo_name} exists and your deploy key is attached."
-                )
-                logger.error(msg)
-                return False, msg, "", NEW_VERSION_BRANCH
-
-            # Initialize locally if repository is completely empty
-            os.makedirs(repo_dir, exist_ok=True)
-            subprocess.run(["git", "init", "-b", MAIN_BRANCH], cwd=repo_dir, check=True, env=env)
-            subprocess.run(["git", "remote", "add", "origin", repo_url], cwd=repo_dir, check=True, env=env)
-
-        # Fetch all branches from remote
-        subprocess.run(["git", "fetch", "origin"], cwd=repo_dir, capture_output=True, text=True, env=env)
-
-        # Check if new_version branch exists on remote
-        br_check = subprocess.run(
-            ["git", "ls-remote", "--heads", "origin", NEW_VERSION_BRANCH],
-            cwd=repo_dir,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=20,
-        )
-        has_remote_nv = bool(br_check.stdout.strip())
-
+        bucket = ensure_okf_bucket(bucket_name, project_id, OKF_BUCKET_LOCATION)
+        blob = bucket.blob(filename)
         existing_content = ""
-        if has_remote_nv:
-            subprocess.run(["git", "checkout", "-B", NEW_VERSION_BRANCH, f"origin/{NEW_VERSION_BRANCH}"], cwd=repo_dir, capture_output=True, text=True, env=env)
-            nv_file_path = os.path.join(repo_dir, filename)
-            if os.path.exists(nv_file_path):
-                with open(nv_file_path, "r", encoding="utf-8") as f:
-                    existing_content = f.read().strip()
-        else:
-            # Create new_version branch from origin/main
-            main_check = subprocess.run(["git", "checkout", "-B", NEW_VERSION_BRANCH, f"origin/{MAIN_BRANCH}"], cwd=repo_dir, capture_output=True, text=True, env=env)
-            if main_check.returncode != 0:
-                subprocess.run(["git", "checkout", "-b", NEW_VERSION_BRANCH], cwd=repo_dir, capture_output=True, text=True, env=env)
+        if blob.exists():
+            try:
+                existing_content = blob.download_as_text(encoding="utf-8").strip()
+            except Exception as e:
+                logger.warning(f"Error reading existing {filename} from gs://{bucket_name}: {e}")
 
-        # If file was not on new_version, check if it exists on origin/main
-        if not existing_content:
-            main_show = subprocess.run(
-                ["git", "show", f"origin/{MAIN_BRANCH}:{filename}"],
-                cwd=repo_dir,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            if main_show.returncode == 0 and main_show.stdout.strip():
-                existing_content = main_show.stdout.strip()
-
-        # Compute updated or initial rules
         if existing_content:
             updated_content, new_policies, new_directives = merge_and_append_new_rules(
                 existing_content, analysis, token_opt
@@ -1434,150 +1365,22 @@ def sync_okf_via_git_ssh(
             cand_policies, cand_directives = get_candidate_new_rules(analysis, token_opt)
             new_policies, new_directives = cand_policies, cand_directives
 
-        # Write ONLY dynamic_context.md (exactly one file)
-        target_file_path = os.path.join(repo_dir, filename)
-        with open(target_file_path, "w", encoding="utf-8") as f:
-            f.write(updated_content)
-
-        # Remove any obsolete dynamic_content.md if lingering in git
-        fallback_path = os.path.join(repo_dir, "dynamic_content.md")
-        if os.path.exists(fallback_path):
-            subprocess.run(["git", "rm", "-f", "dynamic_content.md"], cwd=repo_dir, capture_output=True, text=True, env=env)
-
-        subprocess.run(["git", "add", filename], cwd=repo_dir, check=True, env=env)
-
-        diff_res = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True, env=env)
-        if not diff_res.stdout.strip():
-            sha_res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, capture_output=True, text=True, env=env)
-            commit_sha = sha_res.stdout.strip() if sha_res.returncode == 0 else "HEAD"
-            return True, f"Rules in {filename} on '{NEW_VERSION_BRANCH}' already up to date (@ {commit_sha})", updated_content, NEW_VERSION_BRANCH
-
-        commit_msg = (
-            f"auditor: append new rules to {filename} on {NEW_VERSION_BRANCH} ({now_str}) - awaiting human review"
-        )
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=repo_dir, check=True, env=env)
-
-        sha_res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, capture_output=True, text=True, env=env)
-        commit_sha = sha_res.stdout.strip() if sha_res.returncode == 0 else "HEAD"
-
-        push_res = subprocess.run(["git", "push", "-u", "origin", NEW_VERSION_BRANCH], cwd=repo_dir, capture_output=True, text=True, env=env, timeout=30)
-        if push_res.returncode != 0:
-            err_text = push_res.stderr.strip()
-            if "Permission denied (publickey)" in err_text:
-                return False, f"SSH Permission denied (publickey) pushing to {NEW_VERSION_BRANCH}.", updated_content, NEW_VERSION_BRANCH
-            return False, f"Git push failed to {NEW_VERSION_BRANCH}: {err_text}", updated_content, NEW_VERSION_BRANCH
-
+        # Write to GCS
+        blob.upload_from_string(updated_content, content_type="text/markdown; charset=utf-8")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         logger.info(
-            f"Successfully committed rules to {NEW_VERSION_BRANCH} (@ {commit_sha}). "
+            f"Successfully saved OKF rules to gs://{bucket_name}/{filename} at {now_str}. "
             f"Added {len(new_policies)} policies and {len(new_directives)} directives."
         )
         msg = (
-            f"Successfully added {len(new_policies)} new rules to {filename} on '{NEW_VERSION_BRANCH}' branch (@ {commit_sha}). "
-            "Awaiting human review before merge into main."
+            f"Successfully saved rules to gs://{bucket_name}/{filename} "
+            f"({len(new_policies)} new policies, {len(new_directives)} new directives added directly)."
         )
-        return True, msg, updated_content, NEW_VERSION_BRANCH
-
+        return True, msg, updated_content, bucket_name
     except Exception as e:
-        logger.error(f"Error in sync_okf_via_git_ssh: {e}")
-        return False, f"Deploy key git error: {e}", "", NEW_VERSION_BRANCH
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def sync_okf_via_pygithub(
-    analysis: Dict[str, Any],
-    token_opt: Dict[str, Any],
-    token: str,
-    repo_name: str = REPO_NAME,
-    filename: str = OKF_FILENAME,
-) -> Tuple[bool, str, str, str]:
-    """Interacts with dynamic context file on GitHub using PyGithub REST API (PAT).
-
-    All new or updated OKF rules created by the Auditor Agent are strictly
-    committed to the 'new_version' branch and await human review before merge into main.
-    Only ONE dynamic context file (dynamic_context.md) is created or modified.
-
-    Returns:
-        (success, status_message, final_content, target_branch)
-    """
-    from github import Auth, Github, UnknownObjectException
-
-    g = Github(auth=Auth.Token(token))
-    repo = g.get_repo(repo_name)
-    now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    # Ensure new_version branch exists
-    try:
-        repo.get_branch(NEW_VERSION_BRANCH)
-    except UnknownObjectException:
-        try:
-            main_b = repo.get_branch(MAIN_BRANCH)
-            repo.create_git_ref(ref=f"refs/heads/{NEW_VERSION_BRANCH}", sha=main_b.commit.sha)
-        except Exception as e:
-            logger.warning(f"Could not branch new_version from main: {e}")
-
-    # Read base content from new_version or main
-    existing_content = ""
-    nv_sha = None
-    try:
-        nv_file = repo.get_contents(filename, ref=NEW_VERSION_BRANCH)
-        nv_sha = nv_file.sha
-        existing_content = nv_file.decoded_content.decode("utf-8").strip()
-    except UnknownObjectException:
-        try:
-            main_file = repo.get_contents(filename, ref=MAIN_BRANCH)
-            existing_content = main_file.decoded_content.decode("utf-8").strip()
-        except UnknownObjectException:
-            existing_content = ""
-
-    if existing_content:
-        updated_content, new_policies, new_directives = merge_and_append_new_rules(
-            existing_content, analysis, token_opt
-        )
-    else:
-        updated_content = generate_initial_okf_rules(analysis, token_opt)
-        cand_policies, cand_directives = get_candidate_new_rules(analysis, token_opt)
-        new_policies, new_directives = cand_policies, cand_directives
-
-    if existing_content.strip() == updated_content.strip() and not new_policies and not new_directives and nv_sha:
-        return True, f"Existing rules kept; {filename} on {NEW_VERSION_BRANCH} is already up to date (@ {nv_sha[:8]})", existing_content, NEW_VERSION_BRANCH
-
-    commit_msg = f"auditor: append new rules on {NEW_VERSION_BRANCH} ({now_str}) - awaiting human review"
-    if nv_sha:
-        update_res = repo.update_file(
-            path=filename,
-            message=commit_msg,
-            content=updated_content,
-            sha=nv_sha,
-            branch=NEW_VERSION_BRANCH,
-        )
-        sha = update_res["commit"].sha[:8]
-    else:
-        create_res = repo.create_file(
-            path=filename,
-            message=commit_msg,
-            content=updated_content,
-            branch=NEW_VERSION_BRANCH,
-        )
-        sha = create_res["commit"].sha[:8]
-
-    # If dynamic_content.md exists on new_version, delete it to ensure single OKF file
-    try:
-        alt_file = repo.get_contents("dynamic_content.md", ref=NEW_VERSION_BRANCH)
-        repo.delete_file(
-            path="dynamic_content.md",
-            message=f"auditor: remove obsolete dynamic_content.md on {NEW_VERSION_BRANCH}",
-            sha=alt_file.sha,
-            branch=NEW_VERSION_BRANCH,
-        )
-    except Exception:
-        pass
-
-    msg = (
-        f"Successfully added {len(new_policies)} new rules to {filename} on '{NEW_VERSION_BRANCH}' branch (@ {sha}). "
-        "Awaiting human review before merge into main."
-    )
-    return True, msg, updated_content, NEW_VERSION_BRANCH
+        logger.error(f"Error syncing OKF rules to GCS bucket '{bucket_name}': {e}")
+        initial = generate_initial_okf_rules(analysis, token_opt)
+        return False, f"Cloud Storage sync error: {e}", initial, bucket_name
 
 
 def sync_okf_rules_to_github(
@@ -1586,63 +1389,42 @@ def sync_okf_rules_to_github(
     repo_name: str = REPO_NAME,
     filename: str = OKF_FILENAME,
 ) -> Tuple[bool, str, str, str]:
-    """Coordinates synchronization of dynamic context rules to GitHub using Deploy Key (preferred) or PAT."""
-    # 1. Check for SSH Deploy Key in Secret Manager or env
-    deploy_key = get_secret(DEPLOY_KEY_SECRET_NAME)
-    if not deploy_key:
-        pat_val = get_secret(SECRET_NAME)
-        if pat_val and "PRIVATE KEY" in pat_val:
-            deploy_key = pat_val
+    """Backward compatibility wrapper: redirects to Google Cloud Storage sync."""
+    return sync_okf_rules_to_gcs(analysis, token_opt, OKF_BUCKET_NAME, filename, PROJECT_ID)
 
-    if deploy_key and "PRIVATE KEY" in deploy_key:
-        logger.info("Using SSH deploy key for GitHub operations.")
-        success, msg, content, branch = sync_okf_via_git_ssh(
-            analysis, token_opt, deploy_key, repo_name, filename
-        )
-        if success:
-            return True, msg, content, branch
-        token = get_secret(SECRET_NAME)
-        if is_placeholder_token(token):
-            return False, msg, content, branch
-        logger.info(f"SSH deploy key failed ({msg}); attempting GitHub PAT fallback...")
-    else:
-        token = get_secret(SECRET_NAME)
 
-    # 2. Fall back to GitHub PAT via PyGithub
-    if is_placeholder_token(token):
-        initial = generate_initial_okf_rules(analysis, token_opt)
-        msg = (
-            "No valid GitHub credentials configured in Secret Manager. "
-            f"Add the SSH deploy key to https://github.com/{repo_name}/settings/keys with 'Allow write access'."
-        )
-        logger.warning(msg)
-        return False, msg, initial, NEW_VERSION_BRANCH
+def sync_okf_via_git_ssh(
+    analysis: Dict[str, Any],
+    token_opt: Dict[str, Any],
+    private_key_pem: str = "",
+    repo_name: str = REPO_NAME,
+    filename: str = OKF_FILENAME,
+) -> Tuple[bool, str, str, str]:
+    """Backward compatibility wrapper: redirects to Google Cloud Storage sync."""
+    return sync_okf_rules_to_gcs(analysis, token_opt, OKF_BUCKET_NAME, filename, PROJECT_ID)
 
-    try:
-        return sync_okf_via_pygithub(analysis, token_opt, token, repo_name, filename)
-    except Exception as e:
-        initial = generate_initial_okf_rules(analysis, token_opt)
-        err_msg = str(e)
-        if "401" in err_msg or "Bad credentials" in err_msg:
-            msg = "GitHub 401 Bad credentials: The token in Secret Manager ('github-pat') is invalid or expired."
-        elif "404" in err_msg or "Not Found" in err_msg:
-            msg = f"GitHub 404 Not Found: Repository '{repo_name}' was not found or lacks access."
-        else:
-            msg = f"GitHub commit error: {e}"
-        logger.error(msg)
-        return False, msg, initial, NEW_VERSION_BRANCH
+
+def sync_okf_via_pygithub(
+    analysis: Dict[str, Any],
+    token_opt: Dict[str, Any],
+    token: str = "",
+    repo_name: str = REPO_NAME,
+    filename: str = OKF_FILENAME,
+) -> Tuple[bool, str, str, str]:
+    """Backward compatibility wrapper: redirects to Google Cloud Storage sync."""
+    return sync_okf_rules_to_gcs(analysis, token_opt, OKF_BUCKET_NAME, filename, PROJECT_ID)
 
 
 def commit_okf_via_git_ssh(
     okf_content: str,
-    private_key_pem: str,
+    private_key_pem: str = "",
     repo_name: str = REPO_NAME,
     filename: str = OKF_FILENAME,
 ) -> Tuple[bool, str]:
-    """Compatibility wrapper for deploy key commit."""
+    """Backward compatibility wrapper: redirects to Google Cloud Storage sync."""
     analysis = {"detected_issues": []}
     token_opt = {"token_directives": [], "token_recommendations": [], "estimated_savings_percent": "32%"}
-    success, msg, _, _ = sync_okf_via_git_ssh(analysis, token_opt, private_key_pem, repo_name, filename)
+    success, msg, _, _ = sync_okf_rules_to_gcs(analysis, token_opt, OKF_BUCKET_NAME, filename, PROJECT_ID)
     return success, msg
 
 
@@ -1651,19 +1433,19 @@ def commit_okf_to_github(
     repo_name: str = REPO_NAME,
     filename: str = OKF_FILENAME,
 ) -> Tuple[bool, str]:
-    """Compatibility wrapper for committing OKF rules to GitHub."""
+    """Backward compatibility wrapper: redirects to Google Cloud Storage sync."""
     analysis = {"detected_issues": []}
     token_opt = {"token_directives": [], "token_recommendations": [], "estimated_savings_percent": "32%"}
-    success, msg, _, _ = sync_okf_rules_to_github(analysis, token_opt, repo_name, filename)
+    success, msg, _, _ = sync_okf_rules_to_gcs(analysis, token_opt, OKF_BUCKET_NAME, filename, PROJECT_ID)
     return success, msg
 
 
 def run_audit_pipeline() -> Dict[str, Any]:
-    """Executes the full 3-stage Auditor Agent pipeline with BigQuery AI pushdown and syncs OKF rules to GitHub.
+    """Executes the full 3-stage Auditor Agent pipeline with BigQuery AI pushdown and syncs OKF rules to Google Cloud Storage.
 
     Stage 1: Pushes down customer feedback AI analysis to BigQuery (connection us.gemini, endpoint gemini-3.8-flash).
     Stage 2: Pushes down telemetry, runtime errors, and response quality AI analysis to BigQuery (connection us.gemini, endpoint gemini-3.8-flash).
-    Stage 3: OKF Rule Author & Committer formats and synchronizes rules to GitHub dynamic context.
+    Stage 3: OKF Rule Author & Committer formats and persists rules directly to Google Cloud Storage bucket 'instructions91'.
     """
     logger.info("Executing Auditor Agent Multi-Agent Pipeline with BigQuery AI Pushdown...")
 
@@ -1673,8 +1455,8 @@ def run_audit_pipeline() -> Dict[str, Any]:
     # Stage 2: BigQuery AI Telemetry, Runtime Errors, Sub-Optimal Answers & Token Efficiency Analysis (In-Database Pushdown)
     token_opt = query_agent_telemetry_analysis_bq(PROJECT_ID)
 
-    # Stage 3: OKF Rule Author & Committer (main initialization / new_version incremental update)
-    commit_success, commit_status, final_okf_rules, target_branch = sync_okf_rules_to_github(
+    # Stage 3: OKF Rule Author & Committer (persists rules directly to GCS)
+    sync_success, sync_status, final_okf_rules, target_bucket = sync_okf_rules_to_gcs(
         analysis, token_opt
     )
 
@@ -1702,13 +1484,15 @@ def run_audit_pipeline() -> Dict[str, Any]:
         "token_recommendations": token_opt["token_recommendations"],
         "estimated_token_savings": token_opt["estimated_savings_percent"],
         "okf_rule_block": final_okf_rules,
-        "github_commit_status": commit_status,
-        "github_commit_success": commit_success,
-        "target_branch": target_branch,
-        "workflow_state": (
-            "CREATED_IN_MAIN" if target_branch == MAIN_BRANCH
-            else "AWAITING_HUMAN_REVIEW_ON_NEW_VERSION"
-        ),
+        "storage_sync_status": sync_status,
+        "storage_sync_success": sync_success,
+        "target_bucket": target_bucket,
+        "object_path": f"gs://{target_bucket}/{OKF_FILENAME}",
+        # Backward-compatibility fields
+        "github_commit_status": sync_status,
+        "github_commit_success": sync_success,
+        "target_branch": target_bucket,
+        "workflow_state": "ACTIVE_IN_GCS",
         # Detailed telemetry findings
         "telemetry_issues": token_opt.get("telemetry_issues", []),
         "runtime_errors_count": token_opt.get("total_errors", 0),
@@ -1717,7 +1501,7 @@ def run_audit_pipeline() -> Dict[str, Any]:
         "quality_policies": token_opt.get("quality_policies", []),
         "queries": all_queries,
     }
-    logger.info(f"Auditor Agent Pipeline completed successfully via BigQuery AI pushdown with {len(all_queries)} queries (branch: {target_branch}).")
+    logger.info(f"Auditor Agent Pipeline completed successfully via BigQuery AI pushdown with {len(all_queries)} queries (bucket: {target_bucket}).")
     return report
 
 
