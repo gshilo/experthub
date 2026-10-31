@@ -53,7 +53,7 @@ A conversation terminates when ANY of the following occurs:
 
 ---
 
-## 5. Post-Conversation Rating Rubric & BigQuery Persistence (`demo.customer_ratings`)
+## 5. Post-Conversation Rating Rubric & AlloyDB Persistence (`apex.customer_ratings`)
 Upon chat conclusion, `evaluate_customer_experience()` evaluates the interaction dynamically on a 1–5 scale based on the actual conversation transcript and persona expectations:
 * **5 (Excellent):** Deep technical competence, resolved intricate compatibility or defect without runaround.
 * **4 (Good):** Practical resolution achieved (e.g. door panel replacement, bolt diagnosis), but required customer effort.
@@ -61,14 +61,14 @@ Upon chat conclusion, `evaluate_customer_experience()` evaluates the interaction
 * **2 (Poor / Frustrated):** Rigid policies, carrier delivery failure, delayed warehouse quarantine, or credit card hold tying up funds.
 * **1 (Terrible):** Completely unhelpful, unyielding bureaucracy, or total refusal of service.
 
-Ratings are persisted to BigQuery table `demo.customer_ratings` with schema:
-* `customer_id`: `INTEGER`
-* `customer_name`: `STRING`
+Ratings are persisted via `write_customer_rating_to_alloydb()` to AlloyDB cluster `apex` (database `apex`, table `customer_ratings`) with schema:
+* `customer_id`: `BIGINT` (`INTEGER`)
+* `customer_name`: `TEXT` (`STRING`)
 * `rating`: `INTEGER` (1–5)
-* `description`: `STRING`
-* `timestamp`: `TIMESTAMP` (ISO 8601 UTC timestamp)
+* `description`: `TEXT` (`STRING`)
+* `timestamp`: `TIMESTAMPTZ` (ISO 8601 UTC timestamp)
 
-Because personas and complaints are generated live with wide topical variety, the BigQuery ratings dataset receives a continuously diverse spectrum of feedback, enabling the **Auditor Agent** to discover diverse friction patterns and synthesize novel OKF operational rules.
+Because personas and complaints are generated live with wide topical variety, the AlloyDB ratings table receives a continuously diverse spectrum of feedback, enabling the **Auditor Agent** to discover diverse friction patterns and synthesize novel OKF operational rules.
 
 ---
 

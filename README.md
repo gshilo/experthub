@@ -181,6 +181,18 @@ google-adk>=1.18.0
 
 ## 6. Google Cloud Deployment
 
+### Step-by-Step Student CLI Deployment (`deploy_all.sh`)
+The [`deploy_all.sh`](file:///home/admin_gshilo_altostrat_com/experthub/deploy_all.sh) file is organized as a flat, sequential guide designed for students to copy and paste one command at a time directly into Google Cloud Shell (or terminal), without loops or subshells:
+
+1. **Set Environment Variables:** Export `PROJECT_ID`, `REGION`, `ALLOYDB_PASSWORD`, `GEMINI_API_KEY`, `GITHUB_PAT`.
+2. **Enable APIs & IAM:** Run `gcloud services enable` and individual role bindings.
+3. **Provision Secrets & AlloyDB:** Create Secret Manager secrets, AlloyDB cluster, instance, and database.
+4. **Setup BigQuery:** Create datasets, Vertex AI & AlloyDB connections, and federated views.
+5. **Install Dependencies & Deploy Agents:** Activate virtual environment, install requirements, and deploy agents to Vertex AI Agent Engine.
+6. **Deploy Frontend:** Deploy Cloud Run web service via `gcloud run deploy --source .`.
+
+---
+
 ### Prerequisites & IAM Roles
 Ensure the deployment service account or user account has the following IAM roles in project `experthub-510907`:
 * `roles/aiplatform.admin`

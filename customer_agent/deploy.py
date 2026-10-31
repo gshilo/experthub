@@ -53,6 +53,14 @@ def parse_args():
 def find_existing_agent_engine_id(project: str, region: str, display_name: str) -> Optional[str]:
     try:
         import vertexai
+        client = vertexai.Client(project=project, location=region)
+        for re in client.agent_engines.list():
+            if re.api_resource.display_name == display_name:
+                return re.api_resource.name.split("/")[-1]
+    except Exception:
+        pass
+    try:
+        import vertexai
         from vertexai.preview import reasoning_engines
         vertexai.init(project=project, location=region)
         for re in reasoning_engines.ReasoningEngine.list():
