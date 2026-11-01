@@ -25,6 +25,7 @@ from google.adk.plugins.bigquery_agent_analytics_plugin import (
 )
 from google.cloud import bigquery
 from google.cloud import secretmanager
+from google.cloud import storage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +41,8 @@ BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 DEPLOY_KEY_SECRET_NAME = os.environ.get("GITHUB_DEPLOY_KEY_SECRET_NAME", "github-deploy-key")
 SECRET_NAME = os.environ.get("GITHUB_SECRET_NAME", "github-pat")
 REPO_NAME = "gshilo/experthub_context"
+OKF_BUCKET_NAME = os.environ.get("OKF_BUCKET_NAME", "instructions91")
+OKF_BUCKET_LOCATION = os.environ.get("OKF_BUCKET_LOCATION", "US")
 OKF_FILENAME = "dynamic_context.md"
 OKF_FALLBACK_FILENAME = "dynamic_content.md"
 
@@ -136,115 +139,52 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
 ensure_gemini_api_key(PROJECT_ID)
 
 
-def fetch_okf_via_git_ssh(private_key_pem: str, repo_name: str = REPO_NAME) -> str:
-    """Fetches OKF dynamic context from GitHub using an SSH Deploy Key."""
-    import shutil
-    import subprocess
-    import tempfile
-
-    temp_dir = tempfile.mkdtemp(prefix="okf_read_")
-    key_path = os.path.join(temp_dir, "id_ed25519")
-    repo_dir = os.path.join(temp_dir, "repo")
-    content = ""
-
-    try:
-        with open(key_path, "w", encoding="utf-8") as f:
-            f.write(private_key_pem.strip() + "\n")
-        os.chmod(key_path, 0o600)
-
-        git_ssh_cmd = (
-            f"ssh -i {key_path} "
-            "-o IdentitiesOnly=yes "
-            "-o BatchMode=yes "
-            "-o StrictHostKeyChecking=no "
-            "-o UserKnownHostsFile=/dev/null "
-            "-o ConnectTimeout=10 "
-            "-o LogLevel=ERROR"
-        )
-        env = os.environ.copy()
-        env["GIT_SSH_COMMAND"] = git_ssh_cmd
-        env["SSH_AUTH_SOCK"] = ""
-
-        repo_url = f"git@github.com:{repo_name}.git"
-        res = subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, repo_dir],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=20,
-        )
-        if res.returncode == 0:
-            for fname in [OKF_FILENAME, OKF_FALLBACK_FILENAME]:
-                fpath = os.path.join(repo_dir, fname)
-                if os.path.exists(fpath):
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    logger.info(f"Fetched OKF dynamic context via deploy key ({len(content)} bytes).")
-                    break
-    except Exception as e:
-        logger.warning(f"Error fetching OKF dynamic context via deploy key: {e}")
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-    return content
+def ensure_okf_bucket(
+    bucket_name: str = OKF_BUCKET_NAME,
+    project_id: str = PROJECT_ID,
+    location: str = OKF_BUCKET_LOCATION,
+) -> storage.Bucket:
+    """Ensures that the Google Cloud Storage bucket exists; creates it in location 'US' if missing."""
+    client = storage.Client(project=project_id)
+    bucket = client.bucket(bucket_name)
+    if not bucket.exists():
+        try:
+            logger.info(f"GCS bucket '{bucket_name}' not found. Creating bucket in location '{location}'...")
+            bucket = client.create_bucket(bucket, location=location)
+            logger.info(f"Successfully created GCS bucket '{bucket_name}' in '{location}'.")
+        except Exception as e:
+            if "Conflict" in str(e) or "409" in str(e) or "Already Exists" in str(e):
+                logger.info(f"Bucket '{bucket_name}' was already created concurrently.")
+                bucket = client.bucket(bucket_name)
+            else:
+                logger.error(f"Failed to create GCS bucket '{bucket_name}': {e}")
+                raise
+    return bucket
 
 
 def _fetch_okf_from_remote() -> str:
-    """Performs the actual network fetch of dynamic OKF rules from GitHub."""
+    """Fetches dynamic OKF rules from Google Cloud Storage bucket 'instructions91'.
+
+    If the bucket does not exist on this dynamic context load, it creates it.
+    """
     content = ""
-
-    # 1. Try SSH Deploy Key
-    deploy_key = get_secret(DEPLOY_KEY_SECRET_NAME)
-    if not deploy_key:
-        pat_val = get_secret(SECRET_NAME)
-        if pat_val and "PRIVATE KEY" in pat_val:
-            deploy_key = pat_val
-
-    if deploy_key and "PRIVATE KEY" in deploy_key:
-        content = fetch_okf_via_git_ssh(deploy_key, REPO_NAME)
-
-    # 2. Try GitHub PAT if Deploy Key did not return content
-    if not content:
-        token = get_secret(SECRET_NAME)
-        try:
-            if token and not is_placeholder_token(token):
-                from github import Auth, Github
-
-                g = Github(auth=Auth.Token(token))
-                repo = g.get_repo(REPO_NAME)
-                file_obj = None
-                for branch in ["main", "master"]:
-                    try:
-                        try:
-                            file_obj = repo.get_contents(OKF_FILENAME, ref=branch)
-                            break
-                        except Exception:
-                            file_obj = repo.get_contents(OKF_FALLBACK_FILENAME, ref=branch)
-                            break
-                    except Exception:
-                        continue
-
-                if file_obj and hasattr(file_obj, "decoded_content"):
-                    content = file_obj.decoded_content.decode("utf-8")
-                    logger.info(f"Fetched latest OKF dynamic context from GitHub ({len(content)} bytes).")
-            else:
-                # Try public raw fetch if token is absent
-                import requests
-
-                for branch in ["main", "master"]:
-                    for fname in [OKF_FILENAME, OKF_FALLBACK_FILENAME]:
-                        url = f"https://raw.githubusercontent.com/{REPO_NAME}/{branch}/{fname}"
-                        res = requests.get(url, timeout=5)
-                        if res.status_code == 200:
-                            content = res.text
-                            logger.info(f"Fetched OKF dynamic context via raw URL: {url}")
-                            break
-                    if content:
-                        break
-        except Exception as e:
-            logger.warning(f"Unable to fetch dynamic OKF context from GitHub: {e}. Using empty/cached fallback.")
+    try:
+        bucket = ensure_okf_bucket(OKF_BUCKET_NAME, PROJECT_ID, OKF_BUCKET_LOCATION)
+        blob = bucket.blob(OKF_FILENAME)
+        if blob.exists():
+            content = blob.download_as_text(encoding="utf-8")
+            logger.info(f"Fetched latest OKF dynamic context from gs://{OKF_BUCKET_NAME}/{OKF_FILENAME} ({len(content)} bytes).")
+        else:
+            logger.info(f"OKF object gs://{OKF_BUCKET_NAME}/{OKF_FILENAME} does not exist yet. Using baseline demeanor.")
+    except Exception as e:
+        logger.warning(f"Unable to fetch dynamic OKF context from Cloud Storage bucket '{OKF_BUCKET_NAME}': {e}. Using empty/cached fallback.")
 
     return content
+
+
+def fetch_okf_via_git_ssh(private_key_pem: str = "", repo_name: str = REPO_NAME) -> str:
+    """Backward compatibility wrapper: redirects to Google Cloud Storage fetch."""
+    return _fetch_okf_from_remote()
 
 
 def invalidate_okf_cache(refresh_immediately: bool = True) -> str:
@@ -259,7 +199,7 @@ def invalidate_okf_cache(refresh_immediately: bool = True) -> str:
 
 
 def fetch_okf_dynamic_context(force_refresh: bool = False) -> str:
-    """Fetches dynamic OKF rules from GitHub repository with TTL cache and background refresh."""
+    """Fetches dynamic OKF rules from Cloud Storage bucket 'instructions91' with TTL cache and background refresh."""
     global _OKF_CACHE, _OKF_CACHE_INITIALIZED, _OKF_CACHE_REFRESHING
     cached_content, cached_time = _OKF_CACHE
     now = time.time()
@@ -310,7 +250,7 @@ def get_base_instructions() -> str:
 
 
 def dynamic_instruction_provider(context: Optional[CallbackContext] = None) -> str:
-    """Merges base AGENT.md instructions with dynamic OKF rules from GitHub."""
+    """Merges base AGENT.md instructions with dynamic OKF rules from Cloud Storage."""
     base = get_base_instructions()
     dynamic_okf = fetch_okf_dynamic_context().strip()
 

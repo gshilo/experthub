@@ -6,10 +6,8 @@ Resets the state of the system for a fresh demo run:
 1. Truncates BigQuery tables:
    - demo.customer_ratings
    - agent_telemetry.agent_events
-2. In git repository https://github.com/gshilo/experthub_context.git:
-   - Deletes everything from branch `new_version`
-   - Merges `new_version` into `main`
-   - Pushes both branches to `origin` (leaving both clean/empty)
+2. In Google Cloud Storage bucket instructions91:
+   - Deletes dynamic_context.md (restoring Customer Service Agent to baseline demeanor)
 """
 
 import argparse
@@ -197,6 +195,41 @@ def run_git_command(cmd: list, cwd: str, env: dict, desc: str) -> subprocess.Com
     return res
 
 
+def reset_gcs_context(
+    project_id: str,
+    bucket_name: str = "instructions91",
+    filename: str = "dynamic_context.md",
+    dry_run: bool = False,
+) -> bool:
+    """Deletes dynamic_context.md from Cloud Storage bucket 'instructions91' to restore baseline demeanor."""
+    print("\n--- [2/2] Google Cloud Storage Context Reset ---")
+    print(f"[*] Target object: gs://{bucket_name}/{filename}")
+
+    if dry_run:
+        print(f"[DRY-RUN] Would delete gs://{bucket_name}/{filename} (if exists).")
+        return True
+
+    try:
+        from google.cloud import storage
+
+        client = storage.Client(project=project_id)
+        bucket = client.bucket(bucket_name)
+        if not bucket.exists():
+            print(f"[*] Bucket '{bucket_name}' does not exist yet. OKF state is clean.")
+            return True
+
+        blob = bucket.blob(filename)
+        if blob.exists():
+            blob.delete()
+            print(f"    [OK] Deleted gs://{bucket_name}/{filename}. Agent restored to baseline demeanor.")
+        else:
+            print(f"[*] gs://{bucket_name}/{filename} does not exist. OKF state is already clean.")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to reset GCS context in bucket '{bucket_name}': {e}", file=sys.stderr)
+        return False
+
+
 def reset_git_repository(
     project_id: str,
     repo_url_ssh: str = "git@github.com:gshilo/experthub_context.git",
@@ -362,7 +395,7 @@ def reset_git_repository(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Reset ExpertHub demo state (Truncate BigQuery tables and/or empty Git repository context branches)."
+        description="Reset ExpertHub demo state (Truncate BigQuery tables and clear OKF dynamic context from Google Cloud Storage bucket 'instructions91')."
     )
     parser.add_argument(
         "--project",
@@ -370,8 +403,13 @@ def main():
         help="Google Cloud Project ID (default: detected or experthub-510907)",
     )
     parser.add_argument(
+        "--bucket",
+        default=os.environ.get("OKF_BUCKET_NAME", "instructions91"),
+        help="Google Cloud Storage bucket name for OKF dynamic context (default: instructions91)",
+    )
+    parser.add_argument(
         "--key-file",
-        help="Optional path to private SSH deploy key file. If omitted, fetched automatically from Secret Manager.",
+        help="Optional path to private SSH deploy key file for legacy git resets.",
     )
     parser.add_argument(
         "-y",
@@ -382,7 +420,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Preview all operations without modifying BigQuery or pushing Git commits.",
+        help="Preview all operations without modifying BigQuery or GCS.",
     )
     parser.add_argument(
         "--bq-only",
@@ -392,40 +430,55 @@ def main():
         help="Reset ONLY BigQuery tables (demo.customer_ratings and agent_telemetry.agent_events).",
     )
     parser.add_argument(
+        "--storage-only",
+        "--gcs-only",
+        "--only-storage",
+        action="store_true",
+        dest="storage_only",
+        help="Reset ONLY the Cloud Storage OKF dynamic context file.",
+    )
+    parser.add_argument(
         "--git-only",
         "--only-git",
         action="store_true",
         dest="git_only",
-        help="Reset ONLY the Git repository context branches.",
+        help="Reset ONLY the legacy Git repository context branches.",
     )
 
     args = parser.parse_args()
 
-    # Determine scope: bq, git, or both
-    if args.bq_only and args.git_only:
+    # Determine scope: bq, storage, git
+    reset_git = bool(args.git_only)
+    if args.bq_only and (args.storage_only or args.git_only):
         reset_bq = True
-        reset_git = True
+        reset_storage = bool(args.storage_only)
     elif args.bq_only:
         reset_bq = True
-        reset_git = False
+        reset_storage = False
+    elif args.storage_only:
+        reset_bq = False
+        reset_storage = True
     elif args.git_only:
         reset_bq = False
-        reset_git = True
+        reset_storage = False
     else:
-        # Default: reset both
+        # Default: reset both BigQuery and Cloud Storage
         reset_bq = True
-        reset_git = True
+        reset_storage = True
 
     print("=====================================================")
     print("        EXPERTHUB DEMO STATE RESET UTILITY           ")
     print("=====================================================")
     print(f"Project ID: {args.project}")
     print(f"Dry Run   : {args.dry_run}")
-    print(f"Scope     : BigQuery={'YES' if reset_bq else 'SKIPPED'}, Git={'YES' if reset_git else 'SKIPPED'}")
+    print(f"Scope     : BigQuery={'YES' if reset_bq else 'SKIPPED'}, GCS={'YES' if reset_storage else 'SKIPPED'}, Git={'YES' if reset_git else 'SKIPPED'}")
     print("Actions to be performed:")
     if reset_bq:
         print("  - Truncate BigQuery: demo.customer_ratings")
         print("  - Truncate BigQuery: agent_telemetry.agent_events")
+    if reset_storage:
+        print(f"  - Cloud Storage Bucket 'gs://{args.bucket}':")
+        print("     - Delete dynamic_context.md to reset agent to baseline demeanor")
     if reset_git:
         print("  - GitHub Repo https://github.com/gshilo/experthub_context.git:")
         print("     - Delete all files from branch 'new_version' & commit")
@@ -450,6 +503,7 @@ def main():
             deploy_key_override = f.read().strip()
 
     bq_ok = True
+    storage_ok = True
     git_ok = True
 
     if reset_bq:
@@ -457,31 +511,43 @@ def main():
     else:
         print("\n--- [1/2] BigQuery Table Truncation: SKIPPED ---")
 
+    if reset_storage:
+        storage_ok = reset_gcs_context(
+            project_id=args.project,
+            bucket_name=args.bucket,
+            filename="dynamic_context.md",
+            dry_run=args.dry_run,
+        )
+    else:
+        print("\n--- [2/2] Cloud Storage Context Reset: SKIPPED ---")
+
     if reset_git:
         git_ok = reset_git_repository(
             project_id=args.project,
             deploy_key_override=deploy_key_override,
             dry_run=args.dry_run,
         )
-    else:
-        print("\n--- [2/2] Git Repository State Reset: SKIPPED ---")
 
     print("\n=====================================================")
-    if bq_ok and git_ok:
+    if bq_ok and storage_ok and git_ok:
         status_msg = "DRY RUN COMPLETE - NO CHANGES MADE" if args.dry_run else "DEMO STATE RESET COMPLETED SUCCESSFULLY"
         print(f"  [SUCCESS] {status_msg}")
         if reset_bq:
-            print("            BigQuery Truncation : SUCCESS")
+            print("            BigQuery Truncation  : SUCCESS")
+        if reset_storage:
+            print("            Cloud Storage Reset  : SUCCESS")
         if reset_git:
-            print("            Git Repository Reset: SUCCESS")
+            print("            Git Repository Reset : SUCCESS")
         print("=====================================================")
         sys.exit(0)
     else:
         print("  [FAILURE] One or more reset operations failed.")
         if reset_bq:
-            print(f"            BigQuery Truncation : {'SUCCESS' if bq_ok else 'FAILED'}")
+            print(f"            BigQuery Truncation  : {'SUCCESS' if bq_ok else 'FAILED'}")
+        if reset_storage:
+            print(f"            Cloud Storage Reset  : {'SUCCESS' if storage_ok else 'FAILED'}")
         if reset_git:
-            print(f"            Git Repository Reset: {'SUCCESS' if git_ok else 'FAILED'}")
+            print(f"            Git Repository Reset : {'SUCCESS' if git_ok else 'FAILED'}")
         print("=====================================================")
         sys.exit(1)
 

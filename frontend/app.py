@@ -586,10 +586,14 @@ UNNEST([AI.GENERATE(
             ],
             "estimated_token_savings": "28%",
             "okf_rule_block": "---\ntype: Operational Rule\ntitle: Electronics Support Token Directives\nstatus: stable\n---\n- [Based on: Agent Metrics] Direct answers only\n- [Based on: Agent Metrics] Under 45 words per diagnosis",
-            "github_commit_status": "Committed to dynamic_context.md",
+            "github_commit_status": "Synced to gs://instructions91/dynamic_context.md",
             "github_commit_success": True,
-            "target_branch": "new_version",
-            "workflow_state": "AWAITING_HUMAN_REVIEW_ON_NEW_VERSION",
+            "storage_sync_status": "Synced to gs://instructions91/dynamic_context.md",
+            "storage_sync_success": True,
+            "target_bucket": "instructions91",
+            "object_path": "gs://instructions91/dynamic_context.md",
+            "target_branch": "instructions91",
+            "workflow_state": "ACTIVE_IN_GCS",
             "queries": get_default_audit_queries(PROJECT_ID),
         }
 

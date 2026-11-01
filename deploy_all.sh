@@ -30,6 +30,8 @@ export ALLOYDB_INSTANCE="apex"
 export ALLOYDB_DATABASE="apex"
 export ARTIFACT_REPO="experthub-repo"
 export FRONTEND_SERVICE="experthub-frontend"
+export OKF_BUCKET_NAME="instructions91"
+export OKF_BUCKET_LOCATION="US"
 
 
 # ==============================================================================
@@ -63,7 +65,8 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
   compute.googleapis.com \
-  iam.googleapis.com
+  iam.googleapis.com \
+  storage.googleapis.com
 
 
 # ==============================================================================
@@ -77,16 +80,20 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/aiplatform.user"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/alloydb.client"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/run.invoker"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/storage.objectAdmin"
 
 # Initialize Vertex AI Reasoning Engine service agent and grant roles
 gcloud beta services identity create --service=aiplatform.googleapis.com --project="${PROJECT_ID}"
+sleep 10
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.dataEditor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/secretmanager.secretAccessor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/alloydb.client"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/storage.objectAdmin"
 
 # Initialize BigQuery Connection service agent and grant alloydb.client role
 gcloud beta services identity create --service=bigqueryconnection.googleapis.com --project="${PROJECT_ID}"
+sleep 10
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${BQ_CONN_SA}" --role="roles/alloydb.client"
 
 
@@ -103,6 +110,26 @@ echo -n "${GITHUB_PAT}" | gcloud secrets create github-pat --data-file=- --repli
 # Grant access on secrets to Compute Service Account
 gcloud secrets add-iam-policy-binding gemini-api-key --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
 gcloud secrets add-iam-policy-binding github-pat --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
+
+
+# ==============================================================================
+# STEP 4B: Create Google Cloud Storage Bucket for OKF Dynamic Context
+# ==============================================================================
+
+# Create Google Cloud Storage bucket for dynamic_context.md in location US
+gcloud storage buckets create "gs://${OKF_BUCKET_NAME}" \
+  --project="${PROJECT_ID}" \
+  --location="${OKF_BUCKET_LOCATION}" \
+  --uniform-bucket-level-access 2>/dev/null || echo "Bucket gs://${OKF_BUCKET_NAME} already exists."
+
+# Ensure Compute and Reasoning Engine service accounts have objectAdmin permissions on the bucket
+gcloud storage buckets add-iam-policy-binding "gs://${OKF_BUCKET_NAME}" \
+  --member="serviceAccount:${COMPUTE_SA}" \
+  --role="roles/storage.objectAdmin"
+
+gcloud storage buckets add-iam-policy-binding "gs://${OKF_BUCKET_NAME}" \
+  --member="serviceAccount:${RE_SA}" \
+  --role="roles/storage.objectAdmin"
 
 
 # ==============================================================================
@@ -127,12 +154,6 @@ gcloud alloydb instances create "${ALLOYDB_INSTANCE}" \
   --ssl-mode="ENCRYPTED_ONLY" \
   --project="${PROJECT_ID}"
 
-# 3. Create 'apex' Database in AlloyDB
-gcloud alloydb databases create "${ALLOYDB_DATABASE}" \
-  --cluster="${ALLOYDB_CLUSTER}" \
-  --instance="${ALLOYDB_INSTANCE}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}"
 
 # ------------------------------------------------------------------------------
 # TABLE INITIALIZATION IN GOOGLE CLOUD CONSOLE / ALLOYDB STUDIO:
@@ -235,7 +256,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
   --cpu=1 \
   --memory=512Mi \
   --timeout=300s \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},GITHUB_SECRET_NAME=github-pat"
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat"
 
 # Retrieve and print the deployed web application URL
 gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)"
