@@ -215,13 +215,19 @@ bq mk --use_legacy_sql=false \
 
 
 # ==============================================================================
-# STEP 7: Prepare Python Virtual Environment
+# STEP 7: Clone Application Repository & Prepare Python Virtual Environment
 # ==============================================================================
 
+# 1. Clone repository branch 'cloudday' and change directory
+git clone -b cloudday https://github.com/gshilo/experthub.git
+cd experthub
+
+# 2. Create and activate Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 
+# 3. Install dependencies for agents and frontend
 pip install -r customer_service_agent/requirements.txt
 pip install -r customer_agent/requirements.txt
 pip install -r auditor_agent/requirements.txt
