@@ -200,7 +200,7 @@ export ACCESS_TOKEN="$(gcloud auth print-access-token)"
 curl -X POST "https://bigqueryconnection.googleapis.com/v1/projects/${PROJECT_ID}/locations/${BQ_LOCATION}/connections?connectionId=alloydb" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "{\"friendlyName\":\"alloydb\",\"connectorConfiguration\":{\"connectorId\":\"google-alloydb\",\"asset\":{\"googleCloudResource\":\"${ALLOYDB_RESOURCE}\",\"database\":\"postgres\"},\"authentication\":{\"usernamePassword\":{\"username\":\"postgres\",\"password\":{\"plaintext\":\"${ALLOYDB_PASSWORD}\"}}}}}"
+  -d "{\"friendlyName\":\"alloydb\",\"configuration\":{\"connectorId\":\"google-alloydb\",\"asset\":{\"googleCloudResource\":\"${ALLOYDB_RESOURCE}\",\"database\":\"postgres\"},\"authentication\":{\"usernamePassword\":{\"username\":\"postgres\",\"password\":{\"plaintext\":\"${ALLOYDB_PASSWORD}\"}}}}}"
 
 # 5. Create BigQuery Federated Views pointing to AlloyDB
 bq mk --use_legacy_sql=false \
