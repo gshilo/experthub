@@ -84,6 +84,7 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 
 # Initialize Vertex AI Reasoning Engine service agent and grant roles
 gcloud beta services identity create --service=aiplatform.googleapis.com --project="${PROJECT_ID}"
+sleep 10
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.dataEditor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/secretmanager.secretAccessor"
@@ -92,6 +93,7 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 
 # Initialize BigQuery Connection service agent and grant alloydb.client role
 gcloud beta services identity create --service=bigqueryconnection.googleapis.com --project="${PROJECT_ID}"
+sleep 10
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${BQ_CONN_SA}" --role="roles/alloydb.client"
 
 
@@ -152,12 +154,6 @@ gcloud alloydb instances create "${ALLOYDB_INSTANCE}" \
   --ssl-mode="ENCRYPTED_ONLY" \
   --project="${PROJECT_ID}"
 
-# 3. Create 'apex' Database in AlloyDB
-gcloud alloydb databases create "${ALLOYDB_DATABASE}" \
-  --cluster="${ALLOYDB_CLUSTER}" \
-  --instance="${ALLOYDB_INSTANCE}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}"
 
 # ------------------------------------------------------------------------------
 # TABLE INITIALIZATION IN GOOGLE CLOUD CONSOLE / ALLOYDB STUDIO:
