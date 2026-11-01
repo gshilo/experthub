@@ -189,7 +189,7 @@ bq mk --connection \
   gemini
 
 # 3. Retrieve Vertex AI Connection Service Account and grant aiplatform.user role
-export BQ_VERTEX_SA="$(bq show --format=prettyjson --connection --location=${BQ_LOCATION} ${PROJECT_ID}.${BQ_LOCATION}.gemini | grep 'serviceAccountId' | head -1 | cut -d '\"' -f 4)"
+export BQ_VERTEX_SA="$(bq show --format=prettyjson --connection --location=${BQ_LOCATION} ${PROJECT_ID}.${BQ_LOCATION}.gemini | grep 'serviceAccountId' | head -1 | cut -d '"' -f 4)"
 echo "Vertex AI Connection SA: ${BQ_VERTEX_SA}"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${BQ_VERTEX_SA}" --role="roles/aiplatform.user"
 
