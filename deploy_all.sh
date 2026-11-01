@@ -152,13 +152,6 @@ gcloud alloydb instances create "${ALLOYDB_INSTANCE}" \
   --ssl-mode="ENCRYPTED_ONLY" \
   --project="${PROJECT_ID}"
 
-# 3. Create 'apex' Database in AlloyDB
-gcloud alloydb databases create "${ALLOYDB_DATABASE}" \
-  --cluster="${ALLOYDB_CLUSTER}" \
-  --instance="${ALLOYDB_INSTANCE}" \
-  --region="${REGION}" \
-  --project="${PROJECT_ID}"
-
 # ------------------------------------------------------------------------------
 # TABLE INITIALIZATION IN GOOGLE CLOUD CONSOLE / ALLOYDB STUDIO:
 # Navigate to: Google Cloud Console -> AlloyDB -> Clusters -> apex -> apex instance -> AlloyDB Studio
