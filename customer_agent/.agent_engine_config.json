@@ -1,12 +1,6 @@
 {
-  "psc_interface_config": {
-    "network_attachment": "agent-engine-psc-na",
-    "dns_peering_configs": [
-      {
-        "domain": "us-central1.alloydb-psc.goog.",
-        "target_project": "experthub-510907",
-        "target_network": "default"
-      }
-    ]
+  "env_vars": {
+    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
   }
 }

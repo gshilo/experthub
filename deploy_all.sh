@@ -79,7 +79,12 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/aiplatform.user"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/alloydb.client"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/run.admin"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/run.invoker"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/iam.serviceAccountUser"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/cloudbuild.builds.editor"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/artifactregistry.admin"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/logging.logWriter"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/storage.objectAdmin"
 
 # Initialize Vertex AI Reasoning Engine service agent and grant roles
@@ -242,6 +247,14 @@ pip install -r frontend/requirements.txt
 python customer_service_agent/deploy.py --project="${PROJECT_ID}" --region="${REGION}" --otel_to_cloud
 
 # Deploy Customer Simulator Agent
+cat << 'EOF' > customer_agent/.agent_engine_config.json
+{
+  "env_vars": {
+    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
+  }
+}
+EOF
 python customer_agent/deploy.py --project="${PROJECT_ID}" --region="${REGION}" --otel_to_cloud
 
 # Deploy Auditor Agent
