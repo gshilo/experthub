@@ -8,6 +8,111 @@
 # No complicated bash loops, no subshell forks, and no nested heredocs.
 # ==============================================================================
 
+# If invoked as a script with a step argument (e.g. ./deploy_all.sh step3 or ./deploy_all.sh 3),
+# jump directly to that step.
+if [[ -n "${1:-}" ]]; then
+  STEP_ARG="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+  case "${STEP_ARG}" in
+    3|step3|step_3|"step 3")
+      echo "=== Executing STEP 3: Configure IAM Permissions ==="
+      export PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
+      export PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')}"
+      export COMPUTE_SA="${COMPUTE_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+      export RE_SA="${RE_SA:-service-${PROJECT_NUMBER}@gcp-sa-aiplatform-re.iam.gserviceaccount.com}"
+      export VERTEX_SA="${VERTEX_SA:-service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com}"
+      export BQ_CONN_SA="${BQ_CONN_SA:-service-${PROJECT_NUMBER}@gcp-sa-bigqueryconnection.iam.gserviceaccount.com}"
+
+      echo "Project ID: ${PROJECT_ID}"
+      echo "Project Number: ${PROJECT_NUMBER}"
+      echo "Granting IAM roles to Compute Service Account: ${COMPUTE_SA}..."
+      for role in \
+        "roles/secretmanager.secretAccessor" \
+        "roles/bigquery.dataEditor" \
+        "roles/bigquery.jobUser" \
+        "roles/aiplatform.user" \
+        "roles/alloydb.client" \
+        "roles/alloydb.databaseUser" \
+        "roles/run.admin" \
+        "roles/run.invoker" \
+        "roles/iam.serviceAccountUser" \
+        "roles/cloudbuild.builds.editor" \
+        "roles/artifactregistry.admin" \
+        "roles/logging.logWriter" \
+        "roles/storage.objectAdmin"; do
+        gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="${role}" --quiet
+      done
+
+      echo "Initializing Vertex AI Reasoning Engine service agent..."
+      gcloud beta services identity create --service=aiplatform.googleapis.com --project="${PROJECT_ID}"
+      sleep 10
+
+      echo "Granting IAM roles to Reasoning Engine Service Agent: ${RE_SA}..."
+      for role in \
+        "roles/bigquery.dataEditor" \
+        "roles/bigquery.jobUser" \
+        "roles/secretmanager.secretAccessor" \
+        "roles/alloydb.client" \
+        "roles/alloydb.databaseUser" \
+        "roles/storage.objectAdmin"; do
+        gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="${role}" --quiet
+      done
+
+      echo "Granting IAM roles to Vertex AI Service Agent: ${VERTEX_SA}..."
+      for role in \
+        "roles/alloydb.client" \
+        "roles/alloydb.databaseUser"; do
+        gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${VERTEX_SA}" --role="${role}" --quiet
+      done
+
+      echo "Initializing BigQuery Connection service agent..."
+      gcloud beta services identity create --service=bigqueryconnection.googleapis.com --project="${PROJECT_ID}"
+      sleep 10
+
+      echo "Granting IAM roles to BigQuery Connection Service Agent: ${BQ_CONN_SA}..."
+      gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${BQ_CONN_SA}" --role="roles/alloydb.client" --quiet
+
+      echo "[SUCCESS] Step 3 completed successfully without issues."
+      exit 0
+      ;;
+    9|step9|step_9|"step 9")
+      echo "=== Executing STEP 9: Build and Deploy Frontend Web App to Cloud Run ==="
+      export PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
+      export PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')}"
+      export COMPUTE_SA="${COMPUTE_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+      export REGION="${REGION:-us-central1}"
+      export BQ_LOCATION="${BQ_LOCATION:-US}"
+      export FRONTEND_SERVICE="${FRONTEND_SERVICE:-experthub-frontend}"
+      export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions91}"
+      export OKF_BUCKET_LOCATION="${OKF_BUCKET_LOCATION:-US}"
+
+      echo "Project ID: ${PROJECT_ID}"
+      echo "Deploying Cloud Run service: ${FRONTEND_SERVICE} in region: ${REGION}..."
+      gcloud run deploy "${FRONTEND_SERVICE}" \
+        --source . \
+        --region="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --service-account="${COMPUTE_SA}" \
+        --allow-unauthenticated \
+        --port=8080 \
+        --cpu=1 \
+        --memory=512Mi \
+        --timeout=300s \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat" \
+        --quiet
+
+      FRONTEND_URL="$(gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)")"
+      echo "[SUCCESS] Step 9 completed successfully without issues."
+      echo "Deployed Service URL: ${FRONTEND_URL}"
+      exit 0
+      ;;
+    *)
+      echo "Unknown step argument: $1"
+      echo "Usage to run a specific step: ./deploy_all.sh step3 (or copy and paste steps sequentially)"
+      exit 1
+      ;;
+  esac
+fi
+
 
 # ==============================================================================
 # STEP 0: Set Your Environment Variables
@@ -48,6 +153,7 @@ echo "Project Number: ${PROJECT_NUMBER}"
 # Define service account email addresses for subsequent IAM bindings
 export COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 export RE_SA="service-${PROJECT_NUMBER}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
+export VERTEX_SA="service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com"
 export BQ_CONN_SA="service-${PROJECT_NUMBER}@gcp-sa-bigqueryconnection.iam.gserviceaccount.com"
 
 
@@ -73,12 +179,21 @@ gcloud services enable \
 # STEP 3: Configure IAM Permissions
 # ==============================================================================
 
+# Ensure required variables are set if Step 3 is executed independently
+export PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
+export PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')}"
+export COMPUTE_SA="${COMPUTE_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+export RE_SA="${RE_SA:-service-${PROJECT_NUMBER}@gcp-sa-aiplatform-re.iam.gserviceaccount.com}"
+export VERTEX_SA="${VERTEX_SA:-service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com}"
+export BQ_CONN_SA="${BQ_CONN_SA:-service-${PROJECT_NUMBER}@gcp-sa-bigqueryconnection.iam.gserviceaccount.com}"
+
 # Grant IAM roles to Default Compute Service Account
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/bigquery.dataEditor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/aiplatform.user"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/alloydb.client"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/alloydb.databaseUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/run.admin"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/run.invoker"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${COMPUTE_SA}" --role="roles/iam.serviceAccountUser"
@@ -94,7 +209,12 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.jobUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/secretmanager.secretAccessor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/alloydb.client"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/alloydb.databaseUser"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/storage.objectAdmin"
+
+# Grant roles to Vertex AI Service Agent
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${VERTEX_SA}" --role="roles/alloydb.client"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${VERTEX_SA}" --role="roles/alloydb.databaseUser"
 
 # Initialize BigQuery Connection service agent and grant alloydb.client role
 gcloud beta services identity create --service=bigqueryconnection.googleapis.com --project="${PROJECT_ID}"
@@ -264,6 +384,16 @@ python auditor_agent/deploy.py --project="${PROJECT_ID}" --region="${REGION}" --
 # ==============================================================================
 # STEP 9: Build and Deploy Frontend Web App to Cloud Run
 # ==============================================================================
+
+# Ensure required variables are set if Step 9 is executed independently
+export PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
+export PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects describe ${PROJECT_ID} --format='value(projectNumber)')}"
+export COMPUTE_SA="${COMPUTE_SA:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+export REGION="${REGION:-us-central1}"
+export BQ_LOCATION="${BQ_LOCATION:-US}"
+export FRONTEND_SERVICE="${FRONTEND_SERVICE:-experthub-frontend}"
+export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions91}"
+export OKF_BUCKET_LOCATION="${OKF_BUCKET_LOCATION:-US}"
 
 gcloud run deploy "${FRONTEND_SERVICE}" \
   --source . \
