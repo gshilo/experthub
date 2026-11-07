@@ -17,6 +17,7 @@ dist/
 
 # Terraform binaries and state
 **/.terraform/
+**/terraform.tfstate.d/
 *.tfstate
 *.tfstate.*
 *.tfstate.backup

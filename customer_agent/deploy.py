@@ -6,7 +6,31 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
+from pathlib import Path
 from typing import Optional
+
+
+def _ensure_venv() -> None:
+    """Re-executes the script using the local .venv Python if google.adk or vertexai is missing."""
+    try:
+        import vertexai  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    if os.environ.get("_EXPERTHUB_VENV_REEXEC") == "1":
+        return
+
+    repo_root = Path(__file__).resolve().parent.parent
+    venv_python = repo_root / ".venv" / "bin" / "python3"
+    if venv_python.is_file() and os.access(venv_python, os.X_OK):
+        env = os.environ.copy()
+        env["_EXPERTHUB_VENV_REEXEC"] = "1"
+        os.execve(str(venv_python), [str(venv_python), *sys.argv], env)
+
+
+_ensure_venv()
 
 
 def get_default_project() -> str:
@@ -70,6 +94,28 @@ def parse_args():
     return parser.parse_args()
 
 
+def _network_attachment_exists(project: str, region: str, attachment_name: str = "agent-engine-psc-na") -> bool:
+    try:
+        res = subprocess.run(
+            [
+                "gcloud",
+                "compute",
+                "network-attachments",
+                "describe",
+                attachment_name,
+                f"--region={region}",
+                f"--project={project}",
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def find_existing_agent_engine_id(project: str, region: str, display_name: str) -> Optional[str]:
     try:
         import vertexai
@@ -86,6 +132,23 @@ def find_existing_agent_engine_id(project: str, region: str, display_name: str) 
         for re in reasoning_engines.ReasoningEngine.list():
             if re.display_name == display_name:
                 return re.resource_name.split("/")[-1]
+    except Exception:
+        pass
+    try:
+        tok = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if tok:
+            url = f"https://{region}-aiplatform.googleapis.com/v1beta1/projects/{project}/locations/{region}/reasoningEngines"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for re_obj in data.get("reasoningEngines", []):
+                    if re_obj.get("displayName") == display_name:
+                        return re_obj.get("name", "").split("/")[-1]
     except Exception:
         pass
     return None
@@ -113,14 +176,34 @@ def main():
 
     # Synchronize .agent_engine_config.json target_project with args.project
     config_path = os.path.join(agent_dir, ".agent_engine_config.json")
-    if os.path.exists(config_path):
+    if os.path.exists(config_path) and not args.dry_run:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
-            peering_cfgs = cfg.get("psc_interface_config", {}).get("dns_peering_configs", [])
-            for p in peering_cfgs:
-                p["target_project"] = args.project
-                p["domain"] = f"{args.region}.alloydb-psc.goog."
+            cfg.setdefault(
+                "env_vars",
+                {
+                    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+                    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+                },
+            )
+            if args.dry_run or _network_attachment_exists(args.project, args.region, "agent-engine-psc-na"):
+                cfg["psc_interface_config"] = {
+                    "network_attachment": "agent-engine-psc-na",
+                    "dns_peering_configs": [
+                        {
+                            "domain": f"{args.region}.alloydb-psc.goog.",
+                            "target_project": args.project,
+                            "target_network": "default",
+                        }
+                    ],
+                }
+            else:
+                print(
+                    f"[INFO] Network attachment 'agent-engine-psc-na' not found in {args.project}/{args.region}; "
+                    "omitting psc_interface_config from .agent_engine_config.json."
+                )
+                cfg.pop("psc_interface_config", None)
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
                 f.write("\n")

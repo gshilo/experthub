@@ -2,10 +2,35 @@
 """Deployment script for Auditor Agent to Vertex AI Agent Engine."""
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import urllib.request
+from pathlib import Path
 from typing import Optional
+
+
+def _ensure_venv() -> None:
+    """Re-executes the script using the local .venv Python if google.adk or vertexai is missing."""
+    try:
+        import vertexai  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    if os.environ.get("_EXPERTHUB_VENV_REEXEC") == "1":
+        return
+
+    repo_root = Path(__file__).resolve().parent.parent
+    venv_python = repo_root / ".venv" / "bin" / "python3"
+    if venv_python.is_file() and os.access(venv_python, os.X_OK):
+        env = os.environ.copy()
+        env["_EXPERTHUB_VENV_REEXEC"] = "1"
+        os.execve(str(venv_python), [str(venv_python), *sys.argv], env)
+
+
+_ensure_venv()
 
 
 def get_default_project() -> str:
@@ -72,11 +97,36 @@ def parse_args():
 def find_existing_agent_engine_id(project: str, region: str, display_name: str) -> Optional[str]:
     try:
         import vertexai
+        client = vertexai.Client(project=project, location=region)
+        for re in client.agent_engines.list():
+            if re.api_resource.display_name == display_name:
+                return re.api_resource.name.split("/")[-1]
+    except Exception:
+        pass
+    try:
+        import vertexai
         from vertexai.preview import reasoning_engines
         vertexai.init(project=project, location=region)
         for re in reasoning_engines.ReasoningEngine.list():
             if re.display_name == display_name:
                 return re.resource_name.split("/")[-1]
+    except Exception:
+        pass
+    try:
+        tok = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if tok:
+            url = f"https://{region}-aiplatform.googleapis.com/v1beta1/projects/{project}/locations/{region}/reasoningEngines"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for re_obj in data.get("reasoningEngines", []):
+                    if re_obj.get("displayName") == display_name:
+                        return re_obj.get("name", "").split("/")[-1]
     except Exception:
         pass
     return None

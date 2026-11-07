@@ -126,6 +126,7 @@ Alternatively, copy `terraform.tfvars.example` to `terraform.tfvars` (or pass `-
 ```bash
 cp terraform.tfvars.example terraform.tfvars
 terraform init
+terraform workspace select -or-create <YOUR_PROJECT_ID>
 terraform plan -var="project_id=<YOUR_PROJECT_ID>"
 terraform apply -var="project_id=<YOUR_PROJECT_ID>"
 ```
@@ -154,7 +155,7 @@ Variables can be customized in `terraform.tfvars` or supplied via command-line f
 | `frontend_service_name` | `string` | `"experthub-frontend"` | Name of Cloud Run frontend service. |
 | `frontend_image` | `string` | `""` | Optional explicit container image URI. |
 | `build_frontend_image` | `bool` | `false` | Build frontend container with Cloud Build during apply. |
-| `deploy_vertex_agents` | `bool` | `false` | Trigger agent deployment scripts during apply. |
+| `deploy_vertex_agents` | `bool` | `true` | Trigger agent deployment scripts during apply. |
 | `customer_service_agent_id` | `string` | `""` | Vertex AI Reasoning Engine ID for Customer Service Agent. |
 | `customer_agent_id` | `string` | `""` | Vertex AI Reasoning Engine ID for Customer Simulator. |
 | `auditor_agent_id` | `string` | `""` | Vertex AI Reasoning Engine ID for Auditor Agent. |

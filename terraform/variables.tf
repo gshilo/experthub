@@ -73,6 +73,12 @@ variable "build_frontend_image" {
 variable "deploy_vertex_agents" {
   type        = bool
   description = "Whether to invoke agent deploy scripts for Vertex AI Agent Engine during terraform apply."
+  default     = true
+}
+
+variable "enable_reasoning_engine_iam" {
+  type        = bool
+  description = "Whether to bind IAM roles to the Vertex AI Reasoning Engine Service Agent (requires Reasoning Engine service agent to exist in the project)."
   default     = false
 }
 

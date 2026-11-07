@@ -14,6 +14,7 @@ locals {
     "cloudbuild.googleapis.com",
     "artifactregistry.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
     "iam.googleapis.com",
     "storage.googleapis.com"
   ]
@@ -50,7 +51,11 @@ locals {
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
     "roles/aiplatform.user",
-    "roles/run.invoker"
+    "roles/alloydb.client",
+    "roles/run.invoker",
+    "roles/storage.admin",
+    "roles/artifactregistry.writer",
+    "roles/logging.logWriter"
   ]
 }
 
@@ -69,17 +74,24 @@ locals {
   reasoning_engine_roles = [
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
-    "roles/secretmanager.secretAccessor"
+    "roles/secretmanager.secretAccessor",
+    "roles/alloydb.client",
+    "roles/storage.objectAdmin"
   ]
 }
 
 resource "google_project_iam_member" "reasoning_engine_permissions" {
-  for_each = toset(local.reasoning_engine_roles)
+  for_each = (var.enable_reasoning_engine_iam || var.deploy_vertex_agents) ? toset(local.reasoning_engine_roles) : toset([])
   project  = var.project_id
   role     = each.key
   member   = "serviceAccount:${local.reasoning_engine_sa_email}"
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    null_resource.deploy_customer_service_agent,
+    null_resource.deploy_customer_agent,
+    null_resource.deploy_auditor_agent
+  ]
 }
 
 # ==============================================================================
@@ -282,17 +294,49 @@ resource "null_resource" "build_frontend" {
 
   depends_on = [
     google_artifact_registry_repository.frontend_repo,
-    google_project_service.apis
+    google_project_service.apis,
+    google_project_iam_member.sa_permissions
   ]
 }
 
 # ==============================================================================
-# 7. Vertex AI Agent Engine Deployment Provisioners (Optional automation)
+# 7. Vertex AI Agent Engine Deployment Provisioners (Automated by default)
 # ==============================================================================
+resource "google_compute_network_attachment" "agent_engine_psc" {
+  name                  = "agent-engine-psc-na"
+  project               = var.project_id
+  region                = var.region
+  description           = "Private Service Connect network attachment for Vertex AI Agent Engine"
+  connection_preference = "ACCEPT_AUTOMATIC"
+
+  subnetworks = [
+    "projects/${var.project_id}/regions/${var.region}/subnetworks/default"
+  ]
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "null_resource" "prepare_agent_venv" {
+  count = var.deploy_vertex_agents ? 1 : 0
+
+  triggers = {
+    cs_reqs   = filesha256("${path.module}/../customer_service_agent/requirements.txt")
+    cust_reqs = filesha256("${path.module}/../customer_agent/requirements.txt")
+    aud_reqs  = filesha256("${path.module}/../auditor_agent/requirements.txt")
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.module}/.."
+    command     = "test -x .venv/bin/adk || (python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r customer_service_agent/requirements.txt -r customer_agent/requirements.txt -r auditor_agent/requirements.txt)"
+  }
+}
+
 resource "null_resource" "deploy_customer_service_agent" {
   count = var.deploy_vertex_agents ? 1 : 0
 
   triggers = {
+    project_id = var.project_id
+    region     = var.region
     agent_code = filesha256("${path.module}/../customer_service_agent/agent.py")
     agent_md   = filesha256("${path.module}/../customer_service_agent/AGENT.md")
     reqs       = filesha256("${path.module}/../customer_service_agent/requirements.txt")
@@ -300,13 +344,14 @@ resource "null_resource" "deploy_customer_service_agent" {
 
   provisioner "local-exec" {
     working_dir = "${path.module}/.."
-    command     = "python3 customer_service_agent/deploy.py --project=${var.project_id} --region=${var.region} --otel_to_cloud"
+    command     = ".venv/bin/python3 customer_service_agent/deploy.py --project=${var.project_id} --region=${var.region} --otel_to_cloud"
   }
 
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret.github_pat,
-    google_bigquery_dataset.agent_telemetry
+    google_bigquery_dataset.agent_telemetry,
+    null_resource.prepare_agent_venv
   ]
 }
 
@@ -314,6 +359,8 @@ resource "null_resource" "deploy_customer_agent" {
   count = var.deploy_vertex_agents ? 1 : 0
 
   triggers = {
+    project_id = var.project_id
+    region     = var.region
     agent_code = filesha256("${path.module}/../customer_agent/agent.py")
     agent_md   = filesha256("${path.module}/../customer_agent/AGENT.md")
     reqs       = filesha256("${path.module}/../customer_agent/requirements.txt")
@@ -321,12 +368,14 @@ resource "null_resource" "deploy_customer_agent" {
 
   provisioner "local-exec" {
     working_dir = "${path.module}/.."
-    command     = "python3 customer_agent/deploy.py --project=${var.project_id} --region=${var.region} --otel_to_cloud"
+    command     = ".venv/bin/python3 customer_agent/deploy.py --project=${var.project_id} --region=${var.region} --otel_to_cloud"
   }
 
   depends_on = [
     google_project_service.apis,
-    google_bigquery_table.customer_ratings
+    google_bigquery_table.customer_ratings,
+    google_compute_network_attachment.agent_engine_psc,
+    null_resource.prepare_agent_venv
   ]
 }
 
@@ -334,6 +383,8 @@ resource "null_resource" "deploy_auditor_agent" {
   count = var.deploy_vertex_agents ? 1 : 0
 
   triggers = {
+    project_id = var.project_id
+    region     = var.region
     agent_code = filesha256("${path.module}/../auditor_agent/agent.py")
     agent_md   = filesha256("${path.module}/../auditor_agent/AGENT.md")
     reqs       = filesha256("${path.module}/../auditor_agent/requirements.txt")
@@ -341,14 +392,15 @@ resource "null_resource" "deploy_auditor_agent" {
 
   provisioner "local-exec" {
     working_dir = "${path.module}/.."
-    command     = "python3 auditor_agent/deploy.py --project=${var.project_id} --region=${var.region} --otel_to_cloud"
+    command     = ".venv/bin/python3 auditor_agent/deploy.py --project=${var.project_id} --region=${var.region} --otel_to_cloud"
   }
 
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret.github_pat,
     google_bigquery_dataset.agent_telemetry,
-    google_bigquery_table.customer_ratings
+    google_bigquery_table.customer_ratings,
+    null_resource.prepare_agent_venv
   ]
 }
 
@@ -361,6 +413,7 @@ resource "google_cloud_run_v2_service" "frontend" {
   project              = var.project_id
   ingress              = "INGRESS_TRAFFIC_ALL"
   invoker_iam_disabled = var.invoker_iam_disabled
+  deletion_protection  = false
 
   template {
     service_account = local.app_service_account_email
@@ -432,7 +485,10 @@ resource "google_cloud_run_v2_service" "frontend" {
   depends_on = [
     google_project_service.apis,
     google_artifact_registry_repository.frontend_repo,
-    null_resource.build_frontend
+    null_resource.build_frontend,
+    null_resource.deploy_customer_service_agent,
+    null_resource.deploy_customer_agent,
+    null_resource.deploy_auditor_agent
   ]
 }
 
