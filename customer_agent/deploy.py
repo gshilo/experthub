@@ -2,17 +2,37 @@
 """Deployment script for Customer Simulator Agent to Vertex AI Agent Engine."""
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 from typing import Optional
 
 
+def get_default_project() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj:
+        return env_proj.strip()
+    try:
+        res = subprocess.run(
+            ["gcloud", "config", "get-value", "project"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        proj = res.stdout.strip()
+        if res.returncode == 0 and proj and proj != "(unset)":
+            return proj
+    except Exception:
+        pass
+    return ""
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Deploy Customer Simulator Agent to Vertex AI Agent Engine.")
     parser.add_argument(
         "--project",
-        default=os.environ.get("GOOGLE_CLOUD_PROJECT", "experthub-510907"),
+        default=get_default_project(),
         help="Google Cloud project ID.",
     )
     parser.add_argument(
@@ -73,6 +93,9 @@ def find_existing_agent_engine_id(project: str, region: str, display_name: str) 
 
 def main():
     args = parse_args()
+    if not args.project:
+        print("Error: Google Cloud project ID is required. Pass --project or set GOOGLE_CLOUD_PROJECT.", file=sys.stderr)
+        return 1
     print("=" * 70)
     print(" Deploying Customer Simulator Agent to Vertex AI Agent Engine")
     print(f" Project:      {args.project}")
@@ -87,6 +110,22 @@ def main():
     print("=" * 70)
 
     agent_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Synchronize .agent_engine_config.json target_project with args.project
+    config_path = os.path.join(agent_dir, ".agent_engine_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            peering_cfgs = cfg.get("psc_interface_config", {}).get("dns_peering_configs", [])
+            for p in peering_cfgs:
+                p["target_project"] = args.project
+                p["domain"] = f"{args.region}.alloydb-psc.goog."
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+        except Exception as e:
+            print(f"Warning: Could not update {config_path}: {e}", file=sys.stderr)
 
     adk_bin = os.path.join(agent_dir, "..", ".venv", "bin", "adk")
     if not os.path.exists(adk_bin):

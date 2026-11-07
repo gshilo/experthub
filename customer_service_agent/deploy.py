@@ -8,11 +8,30 @@ import sys
 from typing import Optional
 
 
+def get_default_project() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj:
+        return env_proj.strip()
+    try:
+        res = subprocess.run(
+            ["gcloud", "config", "get-value", "project"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        proj = res.stdout.strip()
+        if res.returncode == 0 and proj and proj != "(unset)":
+            return proj
+    except Exception:
+        pass
+    return ""
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Deploy Customer Service Agent to Vertex AI Agent Engine.")
     parser.add_argument(
         "--project",
-        default=os.environ.get("GOOGLE_CLOUD_PROJECT", "experthub-510907"),
+        default=get_default_project(),
         help="Google Cloud project ID.",
     )
     parser.add_argument(
@@ -65,6 +84,9 @@ def find_existing_agent_engine_id(project: str, region: str, display_name: str) 
 
 def main():
     args = parse_args()
+    if not args.project:
+        print("Error: Google Cloud project ID is required. Pass --project or set GOOGLE_CLOUD_PROJECT.", file=sys.stderr)
+        return 1
     print("=" * 70)
     print(" Deploying Customer Service Agent to Vertex AI Agent Engine")
     print(f" Project:      {args.project}")
@@ -79,6 +101,17 @@ def main():
     print("=" * 70)
 
     agent_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Synchronize plugins.yaml with target project
+    plugins_yaml_path = os.path.join(agent_dir, "plugins.yaml")
+    if os.path.exists(plugins_yaml_path):
+        with open(plugins_yaml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        import re
+        updated = re.sub(r"^(\s*project_id:\s*).*$", f"\\g<1>{args.project}", content, flags=re.MULTILINE)
+        if updated != content:
+            with open(plugins_yaml_path, "w", encoding="utf-8") as f:
+                f.write(updated)
 
     # Check for required ADK binary
     adk_bin = os.path.join(agent_dir, "..", ".venv", "bin", "adk")

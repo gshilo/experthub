@@ -11,11 +11,13 @@ TF_DIR="${SCRIPT_DIR}/terraform"
 AUTO_APPROVE=false
 BUILD_IMAGE=false
 DEPLOY_AGENTS=false
+PROJECT_ID=""
 
 print_usage() {
     echo "Usage: ./deploy_terraform.sh [OPTIONS]"
     echo ""
     echo "Options:"
+    echo "  -p, --project ID        Google Cloud Project ID (defaults to GOOGLE_CLOUD_PROJECT or gcloud config)"
     echo "  -y, --auto-approve      Automatically approve and apply Terraform changes"
     echo "  --build-image           Build frontend container using Cloud Build before deploying"
     echo "  --deploy-agents         Run Vertex AI Agent Engine deploy scripts"
@@ -27,6 +29,14 @@ PLAN_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -p|--project)
+            PROJECT_ID="${2:-}"
+            shift 2
+            ;;
+        --project=*)
+            PROJECT_ID="${1#*=}"
+            shift
+            ;;
         -y|--auto-approve)
             AUTO_APPROVE=true
             shift
@@ -67,10 +77,21 @@ if ! command -v terraform &> /dev/null; then
 fi
 echo "[OK] Found Terraform: $(terraform version | head -n 1)"
 
-# 2. Verify GCP authentication
-ACTIVE_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
+# 2. Verify GCP authentication and resolve active project
+ACTIVE_PROJECT="${PROJECT_ID}"
 if [[ -z "${ACTIVE_PROJECT}" ]]; then
-    ACTIVE_PROJECT="${GOOGLE_CLOUD_PROJECT:-experthub-510907}"
+    ACTIVE_PROJECT="${GOOGLE_CLOUD_PROJECT:-${GCP_PROJECT:-}}"
+fi
+if [[ -z "${ACTIVE_PROJECT}" ]]; then
+    ACTIVE_PROJECT="$(gcloud config get-value project 2>/dev/null || echo "")"
+    if [[ "${ACTIVE_PROJECT}" == "(unset)" ]]; then
+        ACTIVE_PROJECT=""
+    fi
+fi
+if [[ -z "${ACTIVE_PROJECT}" ]]; then
+    echo "Error: No Google Cloud Project ID detected." >&2
+    echo "Specify '--project <PROJECT_ID>', export GOOGLE_CLOUD_PROJECT, or run 'gcloud config set project <PROJECT_ID>'." >&2
+    exit 1
 fi
 echo "[OK] Active GCP Project: ${ACTIVE_PROJECT}"
 
@@ -80,7 +101,7 @@ echo "--> Initializing Terraform in ${TF_DIR}..."
 terraform -chdir="${TF_DIR}" init
 
 # 4. Generate plan arguments
-EXTRA_VARS=()
+EXTRA_VARS=("-var=project_id=${ACTIVE_PROJECT}")
 if [[ "${BUILD_IMAGE}" == "true" ]]; then
     EXTRA_VARS+=("-var=build_frontend_image=true")
 fi

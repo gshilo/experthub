@@ -44,7 +44,7 @@ _ensure_venv()
 
 
 def get_default_project() -> str:
-    """Detects GCP project from env or gcloud config, defaulting to experthub-510907."""
+    """Detects GCP project from env, gcloud config, or Application Default Credentials."""
     env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     if env_proj:
         return env_proj.strip()
@@ -55,11 +55,19 @@ def get_default_project() -> str:
             text=True,
             check=False,
         )
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
+        proj = res.stdout.strip()
+        if res.returncode == 0 and proj and proj != "(unset)":
+            return proj
     except Exception:
         pass
-    return "experthub-510907"
+    try:
+        import google.auth
+        _, default_proj = google.auth.default()
+        if default_proj:
+            return default_proj
+    except Exception:
+        pass
+    return ""
 
 
 def get_deploy_key(project_id: str, secret_id: str = "github-deploy-key") -> Optional[str]:
@@ -400,7 +408,7 @@ def main():
     parser.add_argument(
         "--project",
         default=get_default_project(),
-        help="Google Cloud Project ID (default: detected or experthub-510907)",
+        help="Google Cloud Project ID (default: detected from env or gcloud config)",
     )
     parser.add_argument(
         "--bucket",

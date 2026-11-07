@@ -30,11 +30,21 @@ logger = logging.getLogger("frontend_app")
 
 app = Flask(__name__)
 
-PROJECT_ID = (
-    os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("GCP_PROJECT")
-    or "experthub-510907"
-)
+def _resolve_project_id() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj:
+        return env_proj.strip()
+    try:
+        import google.auth
+        _, default_proj = google.auth.default()
+        if default_proj:
+            return default_proj
+    except Exception:
+        pass
+    return ""
+
+
+PROJECT_ID = _resolve_project_id()
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 
 
@@ -1678,7 +1688,7 @@ class SimulationSession:
 def index():
     """Serves the web dashboard and ensures pre-warmed conversation pool is topped up."""
     ensure_prewarm_pool(PREWARM_POOL_TARGET)
-    return render_template("index.html")
+    return render_template("index.html", project_id=PROJECT_ID)
 
 
 @app.after_request

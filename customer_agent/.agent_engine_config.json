@@ -4,7 +4,7 @@
     "dns_peering_configs": [
       {
         "domain": "us-central1.alloydb-psc.goog.",
-        "target_project": "experthub-510907",
+        "target_project": "",
         "target_network": "default"
       }
     ]

@@ -20,6 +20,8 @@ dist/
 *.tfstate
 *.tfstate.*
 *.tfstate.backup
+*.tfvars
+!*.tfvars.example
 crash.log
 
 # Temporary build & deployment dirs

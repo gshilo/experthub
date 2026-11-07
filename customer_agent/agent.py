@@ -31,11 +31,20 @@ from google.genai import types
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("customer_agent")
 
-PROJECT_ID = (
-    os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("GCP_PROJECT")
-    or "experthub-510907"
-)
+def _resolve_project_id() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj:
+        return env_proj.strip()
+    try:
+        _, default_proj = google.auth.default()
+        if default_proj:
+            return default_proj
+    except Exception:
+        pass
+    return ""
+
+
+PROJECT_ID = _resolve_project_id()
 ALLOYDB_REGION = os.environ.get("ALLOYDB_REGION") or os.environ.get("GCP_REGION") or "us-central1"
 ALLOYDB_CLUSTER = os.environ.get("ALLOYDB_CLUSTER", "apex")
 ALLOYDB_INSTANCE = os.environ.get("ALLOYDB_INSTANCE", "apex")
@@ -165,7 +174,19 @@ def _get_alloydb_iam_user() -> str:
         return email[: -len(".gserviceaccount.com")]
     if email:
         return email
-    return "537563976049-compute@developer"
+
+    try:
+        req = urllib.request.Request(
+            "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            project_num = resp.read().decode("utf-8").strip()
+            if project_num:
+                return f"{project_num}-compute@developer"
+    except Exception:
+        pass
+    return "postgres"
 
 
 def _connect_alloydb(

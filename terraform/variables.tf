@@ -1,7 +1,6 @@
 variable "project_id" {
   type        = string
   description = "Google Cloud Project ID where all resources will be deployed."
-  default     = "experthub-510907"
 }
 
 variable "region" {
@@ -37,8 +36,8 @@ variable "use_existing_service_account" {
 
 variable "existing_service_account_email" {
   type        = string
-  description = "Email of the existing service account to use if use_existing_service_account is true."
-  default     = "537563976049-compute@developer.gserviceaccount.com"
+  description = "Email of the existing service account to use if use_existing_service_account is true. If empty, defaults to <project_number>-compute@developer.gserviceaccount.com."
+  default     = ""
 }
 
 variable "service_account_id" {
@@ -80,19 +79,19 @@ variable "deploy_vertex_agents" {
 variable "customer_service_agent_id" {
   type        = string
   description = "Vertex AI Reasoning Engine ID for the Customer Service Agent."
-  default     = "2556039354015285248"
+  default     = ""
 }
 
 variable "customer_agent_id" {
   type        = string
   description = "Vertex AI Reasoning Engine ID for the Customer Simulator Agent."
-  default     = "8810413336526061568"
+  default     = ""
 }
 
 variable "auditor_agent_id" {
   type        = string
   description = "Vertex AI Reasoning Engine ID for the Auditor Agent."
-  default     = "4360856904684011520"
+  default     = ""
 }
 
 variable "invoker_iam_disabled" {

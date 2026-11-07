@@ -10,7 +10,7 @@ The Terraform script declaratively defines, configures, and links all components
 
 ```mermaid
 flowchart TD
-    subgraph GCP["Google Cloud Project (experthub-510907)"]
+    subgraph GCP["Google Cloud Project (<YOUR_PROJECT_ID>)"]
         subgraph Services["API Services (google_project_service)"]
             APIs["aiplatform, run, secretmanager,<br/>bigquery, cloudbuild, artifactregistry"]
         end
@@ -112,28 +112,27 @@ terraform/
 - [Google Cloud CLI (`gcloud`)](https://cloud.google.com/sdk/docs/install) authenticated:
   ```bash
   gcloud auth application-default login
-  gcloud config set project experthub-510907
+  gcloud config set project <YOUR_PROJECT_ID>
   ```
 
-### Step 1: Initialize Terraform
-From within the `terraform/` directory:
+### Automated Deployment Script
+From the repository root, run `./deploy_terraform.sh`, which auto-detects your active `gcloud` / `GOOGLE_CLOUD_PROJECT` project or accepts `--project`:
 ```bash
+./deploy_terraform.sh --project <YOUR_PROJECT_ID>
+```
+
+### Manual Terraform Execution
+Alternatively, copy `terraform.tfvars.example` to `terraform.tfvars` (or pass `-var="project_id=<YOUR_PROJECT_ID>"`) from within the `terraform/` directory:
+```bash
+cp terraform.tfvars.example terraform.tfvars
 terraform init
-```
-
-### Step 2: Review Execution Plan
-```bash
-terraform plan
-```
-
-### Step 3: Apply Infrastructure
-```bash
-terraform apply
+terraform plan -var="project_id=<YOUR_PROJECT_ID>"
+terraform apply -var="project_id=<YOUR_PROJECT_ID>"
 ```
 
 To run non-interactively in automated CI/CD pipelines:
 ```bash
-terraform apply -auto-approve
+terraform apply -auto-approve -var="project_id=<YOUR_PROJECT_ID>"
 ```
 
 ---
@@ -144,21 +143,21 @@ Variables can be customized in `terraform.tfvars` or supplied via command-line f
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `project_id` | `string` | `"experthub-510907"` | GCP Project ID. |
+| `project_id` | `string` | *(required)* | GCP Project ID. |
 | `region` | `string` | `"us-central1"` | GCP Region for Cloud Run, Artifact Registry, and Vertex AI. |
 | `bq_location` | `string` | `"US"` | BigQuery location (`US` multi-region or regional). |
 | `secret_name` | `string` | `"github-pat"` | Secret Manager secret name for GitHub token. |
 | `github_pat` | `string` (sensitive) | `""` | GitHub Personal Access Token. |
 | `use_existing_service_account`| `bool` | `true` | Use Compute Engine default SA instead of creating new SA. |
-| `existing_service_account_email`| `string` | `"<number>-compute@..."` | Email of existing service account. |
+| `existing_service_account_email`| `string` | `""` *(auto-resolves `<number>-compute@...`)* | Email of existing service account. |
 | `artifact_repository_id` | `string` | `"cloud-run-source-deploy"` | Artifact Registry Docker repository ID. |
 | `frontend_service_name` | `string` | `"experthub-frontend"` | Name of Cloud Run frontend service. |
 | `frontend_image` | `string` | `""` | Optional explicit container image URI. |
 | `build_frontend_image` | `bool` | `false` | Build frontend container with Cloud Build during apply. |
 | `deploy_vertex_agents` | `bool` | `false` | Trigger agent deployment scripts during apply. |
-| `customer_service_agent_id` | `string` | `"2556039354015285248"` | Vertex AI Reasoning Engine ID for Customer Service Agent. |
-| `customer_agent_id` | `string` | `"8810413336526061568"` | Vertex AI Reasoning Engine ID for Customer Simulator. |
-| `auditor_agent_id` | `string` | `"4360856904684011520"` | Vertex AI Reasoning Engine ID for Auditor Agent. |
+| `customer_service_agent_id` | `string` | `""` | Vertex AI Reasoning Engine ID for Customer Service Agent. |
+| `customer_agent_id` | `string` | `""` | Vertex AI Reasoning Engine ID for Customer Simulator. |
+| `auditor_agent_id` | `string` | `""` | Vertex AI Reasoning Engine ID for Auditor Agent. |
 | `invoker_iam_disabled` | `bool` | `true` | Disable Cloud Run IAM check (allows public traffic in domain-restricted orgs). |
 | `allow_public_allusers` | `bool` | `false` | Bind `allUsers` to `roles/run.invoker` if organization policy permits. |
 
@@ -166,7 +165,7 @@ Variables can be customized in `terraform.tfvars` or supplied via command-line f
 
 ## 5. Automated Build & Deploy Flags
 
-If you are provisioning from scratch in a fresh GCP project, you can enable end-to-end building and agent staging directly in `terraform.tfvars`:
+If you are provisioning from scratch in a fresh GCP project, you can enable end-to-end building and agent staging via CLI flags (`./deploy_terraform.sh --build-image --deploy-agents`) or in `terraform.tfvars`:
 
 ```hcl
 build_frontend_image = true
@@ -194,15 +193,15 @@ bigquery_datasets = {
 }
 customer_ratings_table = "demo.customer_ratings"
 frontend_service_name = "experthub-frontend"
-frontend_url = "https://experthub-frontend-t5mmwhc23a-uc.a.run.app"
-project_id = "experthub-510907"
+frontend_url = "https://experthub-frontend-<hash>-uc.a.run.app"
+project_id = "<YOUR_PROJECT_ID>"
 region = "us-central1"
-secret_manager_github_pat = "projects/537563976049/secrets/github-pat"
-service_account_email = "537563976049-compute@developer.gserviceaccount.com"
+secret_manager_github_pat = "projects/<PROJECT_NUMBER>/secrets/github-pat"
+service_account_email = "<PROJECT_NUMBER>-compute@developer.gserviceaccount.com"
 vertex_ai_agent_ids = {
-  "auditor_agent" = "4360856904684011520"
-  "customer_agent" = "8810413336526061568"
-  "customer_service_agent" = "2556039354015285248"
+  "auditor_agent" = ""
+  "customer_agent" = ""
+  "customer_service_agent" = ""
 }
 ```
 

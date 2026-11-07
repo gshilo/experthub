@@ -29,11 +29,20 @@ from google.cloud import storage
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("auditor_agent")
 
-PROJECT_ID = (
-    os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("GCP_PROJECT")
-    or "experthub-510907"
-)
+def _resolve_project_id() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj:
+        return env_proj.strip()
+    try:
+        _, default_proj = google.auth.default()
+        if default_proj:
+            return default_proj
+    except Exception:
+        pass
+    return ""
+
+
+PROJECT_ID = _resolve_project_id()
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 OKF_BUCKET_NAME = os.environ.get("OKF_BUCKET_NAME", "instructions91")
 OKF_BUCKET_LOCATION = os.environ.get("OKF_BUCKET_LOCATION", "US")
