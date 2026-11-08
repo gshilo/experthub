@@ -176,7 +176,7 @@ def main():
         return 0
 
     try:
-        result = subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, input="n\n", text=True, check=True)
         print("Auditor Agent deployed successfully to Vertex AI Agent Engine.")
         return result.returncode
     except subprocess.CalledProcessError as e:

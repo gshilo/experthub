@@ -188,7 +188,7 @@ def main():
         return 0
 
     try:
-        result = subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, input="n\n", text=True, check=True)
         print("Customer Service Agent deployed successfully to Vertex AI Agent Engine.")
         return result.returncode
     except subprocess.CalledProcessError as e:
@@ -198,6 +198,18 @@ def main():
     except FileNotFoundError:
         print(f"Error: ADK CLI '{adk_bin}' not found.", file=sys.stderr)
         return 1
+    finally:
+        if os.path.exists(plugins_yaml_path) and not args.dry_run:
+            try:
+                import re
+                with open(plugins_yaml_path, "r", encoding="utf-8") as f:
+                    cur = f.read()
+                restored = re.sub(r"^(\s*project_id:\s*).*$", r'\g<1>""', cur, flags=re.MULTILINE)
+                if restored != cur:
+                    with open(plugins_yaml_path, "w", encoding="utf-8") as f:
+                        f.write(restored)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

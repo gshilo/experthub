@@ -99,6 +99,8 @@ if [[ -z "${ACTIVE_PROJECT}" ]]; then
     exit 1
 fi
 echo "[OK] Active GCP Project: ${ACTIVE_PROJECT}"
+export GOOGLE_CLOUD_PROJECT="${ACTIVE_PROJECT}"
+gcloud config set project "${ACTIVE_PROJECT}" --quiet >/dev/null 2>&1 || true
 
 # 3. Initialize Terraform & isolate state per project via workspace
 echo ""
@@ -160,29 +162,55 @@ ENABLE_RE_IAM=false
 CS_AGENT_ID=""
 CUST_AGENT_ID=""
 AUD_AGENT_ID=""
-ACCESS_TOKEN="$(gcloud auth print-access-token 2>/dev/null || echo "")"
-if [[ -n "${ACCESS_TOKEN}" ]]; then
-    RE_LIST="$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${ACTIVE_PROJECT}/locations/us-central1/reasoningEngines" 2>/dev/null || echo "")"
-    if echo "${RE_LIST}" | grep -q '"reasoningEngines"'; then
-        ENABLE_RE_IAM=true
-        CS_AGENT_ID="$(RE_JSON="${RE_LIST}" python3 -c 'import json, os; d=json.loads(os.environ.get("RE_JSON","{}")); print(next((r["name"].split("/")[-1] for r in d.get("reasoningEngines",[]) if r.get("displayName")=="customer_service_agent"), ""))' 2>/dev/null || echo "")"
-        CUST_AGENT_ID="$(RE_JSON="${RE_LIST}" python3 -c 'import json, os; d=json.loads(os.environ.get("RE_JSON","{}")); print(next((r["name"].split("/")[-1] for r in d.get("reasoningEngines",[]) if r.get("displayName")=="customer_agent"), ""))' 2>/dev/null || echo "")"
-        AUD_AGENT_ID="$(RE_JSON="${RE_LIST}" python3 -c 'import json, os; d=json.loads(os.environ.get("RE_JSON","{}")); print(next((r["name"].split("/")[-1] for r in d.get("reasoningEngines",[]) if r.get("displayName")=="auditor_agent"), ""))' 2>/dev/null || echo "")"
-    fi
-fi
+
+resolve_agent_ids() {
+    local parsed
+    parsed="$(python3 - "${ACTIVE_PROJECT}" <<'PYEOF'
+import json, subprocess, sys, urllib.request
+proj = sys.argv[1]
+try:
+    tok = subprocess.check_output(["gcloud", "auth", "print-access-token"], stderr=subprocess.DEVNULL, text=True).strip()
+    url = f"https://us-central1-aiplatform.googleapis.com/v1beta1/projects/{proj}/locations/us-central1/reasoningEngines"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        d = json.loads(resp.read().decode("utf-8"))
+    engines = d.get("reasoningEngines", [])
+    has_re = "true" if "reasoningEngines" in d else "false"
+    by_name = {r.get("displayName"): r.get("name", "").split("/")[-1] for r in engines if r.get("displayName")}
+    print(f"{has_re}|{by_name.get('customer_service_agent','')}|{by_name.get('customer_agent','')}|{by_name.get('auditor_agent','')}")
+except Exception:
+    print("false|||")
+PYEOF
+)"
+    IFS='|' read -r ENABLE_RE_IAM CS_AGENT_ID CUST_AGENT_ID AUD_AGENT_ID <<< "${parsed}"
+}
+
+resolve_agent_ids
 
 if [[ "${DEPLOY_AGENTS}" == "true" ]]; then
-    if [[ -z "${CS_AGENT_ID}" ]] && echo "${EXISTING_STATE}" | grep -Fxq "null_resource.deploy_customer_service_agent[0]"; then
-        echo "    Agent 'customer_service_agent' missing in Agent Engine; marking for deployment..."
-        terraform -chdir="${TF_DIR}" state rm "null_resource.deploy_customer_service_agent[0]" >/dev/null 2>&1 || true
+    if echo "${EXISTING_STATE}" | grep -Fxq "null_resource.deploy_customer_service_agent[0]"; then
+        if [[ -z "${CS_AGENT_ID}" ]]; then
+            echo "    Agent 'customer_service_agent' missing in Agent Engine; marking for deployment..."
+            terraform -chdir="${TF_DIR}" state rm "null_resource.deploy_customer_service_agent[0]" >/dev/null 2>&1 || true
+        elif terraform -chdir="${TF_DIR}" state show "null_resource.deploy_customer_service_agent[0]" 2>/dev/null | head -n 5 | grep -q "(tainted)"; then
+            terraform -chdir="${TF_DIR}" untaint "null_resource.deploy_customer_service_agent[0]" >/dev/null 2>&1 || true
+        fi
     fi
-    if [[ -z "${CUST_AGENT_ID}" ]] && echo "${EXISTING_STATE}" | grep -Fxq "null_resource.deploy_customer_agent[0]"; then
-        echo "    Agent 'customer_agent' missing in Agent Engine; marking for deployment..."
-        terraform -chdir="${TF_DIR}" state rm "null_resource.deploy_customer_agent[0]" >/dev/null 2>&1 || true
+    if echo "${EXISTING_STATE}" | grep -Fxq "null_resource.deploy_customer_agent[0]"; then
+        if [[ -z "${CUST_AGENT_ID}" ]]; then
+            echo "    Agent 'customer_agent' missing in Agent Engine; marking for deployment..."
+            terraform -chdir="${TF_DIR}" state rm "null_resource.deploy_customer_agent[0]" >/dev/null 2>&1 || true
+        elif terraform -chdir="${TF_DIR}" state show "null_resource.deploy_customer_agent[0]" 2>/dev/null | head -n 5 | grep -q "(tainted)"; then
+            terraform -chdir="${TF_DIR}" untaint "null_resource.deploy_customer_agent[0]" >/dev/null 2>&1 || true
+        fi
     fi
-    if [[ -z "${AUD_AGENT_ID}" ]] && echo "${EXISTING_STATE}" | grep -Fxq "null_resource.deploy_auditor_agent[0]"; then
-        echo "    Agent 'auditor_agent' missing in Agent Engine; marking for deployment..."
-        terraform -chdir="${TF_DIR}" state rm "null_resource.deploy_auditor_agent[0]" >/dev/null 2>&1 || true
+    if echo "${EXISTING_STATE}" | grep -Fxq "null_resource.deploy_auditor_agent[0]"; then
+        if [[ -z "${AUD_AGENT_ID}" ]]; then
+            echo "    Agent 'auditor_agent' missing in Agent Engine; marking for deployment..."
+            terraform -chdir="${TF_DIR}" state rm "null_resource.deploy_auditor_agent[0]" >/dev/null 2>&1 || true
+        elif terraform -chdir="${TF_DIR}" state show "null_resource.deploy_auditor_agent[0]" 2>/dev/null | head -n 5 | grep -q "(tainted)"; then
+            terraform -chdir="${TF_DIR}" untaint "null_resource.deploy_auditor_agent[0]" >/dev/null 2>&1 || true
+        fi
     fi
 fi
 
@@ -215,6 +243,10 @@ if [[ "${PLAN_ONLY}" == "true" ]]; then
 fi
 
 # 5. Apply Terraform changes
+PRE_CS_ID="${CS_AGENT_ID}"
+PRE_CUST_ID="${CUST_AGENT_ID}"
+PRE_AUD_ID="${AUD_AGENT_ID}"
+
 echo ""
 if [[ "${AUTO_APPROVE}" == "true" ]]; then
     echo "--> Applying Terraform changes (-auto-approve)..."
@@ -222,6 +254,21 @@ if [[ "${AUTO_APPROVE}" == "true" ]]; then
 else
     echo "--> Applying Terraform changes..."
     terraform -chdir="${TF_DIR}" apply "${EXTRA_VARS[@]}"
+fi
+
+# 5b. If any agents were newly created during apply, refresh their IDs into Cloud Run & Terraform outputs
+if [[ "${DEPLOY_AGENTS}" == "true" ]] && [[ -z "${PRE_CS_ID}" || -z "${PRE_CUST_ID}" || -z "${PRE_AUD_ID}" ]]; then
+    resolve_agent_ids
+    if [[ "${CS_AGENT_ID}" != "${PRE_CS_ID}" || "${CUST_AGENT_ID}" != "${PRE_CUST_ID}" || "${AUD_AGENT_ID}" != "${PRE_AUD_ID}" ]]; then
+        echo ""
+        echo "--> Synchronizing newly deployed Vertex AI Agent Engine IDs with Cloud Run frontend..."
+        SYNC_VARS=("-var=project_id=${ACTIVE_PROJECT}" "-var=deploy_vertex_agents=${DEPLOY_AGENTS}" "-var=enable_reasoning_engine_iam=true")
+        [[ "${BUILD_IMAGE}" == "true" ]] && SYNC_VARS+=("-var=build_frontend_image=true")
+        [[ -n "${CS_AGENT_ID}" ]] && SYNC_VARS+=("-var=customer_service_agent_id=${CS_AGENT_ID}")
+        [[ -n "${CUST_AGENT_ID}" ]] && SYNC_VARS+=("-var=customer_agent_id=${CUST_AGENT_ID}")
+        [[ -n "${AUD_AGENT_ID}" ]] && SYNC_VARS+=("-var=auditor_agent_id=${AUD_AGENT_ID}")
+        terraform -chdir="${TF_DIR}" apply -auto-approve "${SYNC_VARS[@]}"
+    fi
 fi
 
 echo ""

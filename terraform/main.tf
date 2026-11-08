@@ -52,6 +52,10 @@ locals {
     "roles/bigquery.jobUser",
     "roles/aiplatform.user",
     "roles/alloydb.client",
+    "roles/alloydb.databaseUser",
+    "roles/compute.networkAdmin",
+    "roles/dns.peer",
+    "roles/serviceusage.serviceUsageConsumer",
     "roles/run.invoker",
     "roles/storage.admin",
     "roles/artifactregistry.writer",
@@ -68,15 +72,53 @@ resource "google_project_iam_member" "sa_permissions" {
   depends_on = [google_project_service.apis]
 }
 
-# Vertex AI Reasoning Engine / Agent Engine Service Agent IAM permissions
+# Vertex AI & Reasoning Engine Service Agent IAM permissions
 locals {
+  aiplatform_sa_email       = "service-${data.google_project.current.number}@gcp-sa-aiplatform.iam.gserviceaccount.com"
   reasoning_engine_sa_email = "service-${data.google_project.current.number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
+
+  aiplatform_sa_roles = [
+    "roles/compute.networkAdmin",
+    "roles/dns.peer",
+    "roles/alloydb.client",
+    "roles/alloydb.databaseUser",
+    "roles/serviceusage.serviceUsageConsumer"
+  ]
+
   reasoning_engine_roles = [
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
     "roles/secretmanager.secretAccessor",
     "roles/alloydb.client",
-    "roles/storage.objectAdmin"
+    "roles/alloydb.databaseUser",
+    "roles/storage.objectAdmin",
+    "roles/compute.networkAdmin",
+    "roles/dns.peer",
+    "roles/serviceusage.serviceUsageConsumer"
+  ]
+}
+
+resource "null_resource" "ensure_aiplatform_service_identities" {
+  triggers = {
+    project_id = var.project_id
+  }
+
+  provisioner "local-exec" {
+    command = "gcloud beta services identity create --service=aiplatform.googleapis.com --project=${var.project_id} --quiet >/dev/null 2>&1 || true"
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "aiplatform_sa_permissions" {
+  for_each = (var.enable_reasoning_engine_iam || var.deploy_vertex_agents) ? toset(local.aiplatform_sa_roles) : toset([])
+  project  = var.project_id
+  role     = each.key
+  member   = "serviceAccount:${local.aiplatform_sa_email}"
+
+  depends_on = [
+    google_project_service.apis,
+    null_resource.ensure_aiplatform_service_identities
   ]
 }
 
@@ -88,9 +130,8 @@ resource "google_project_iam_member" "reasoning_engine_permissions" {
 
   depends_on = [
     google_project_service.apis,
-    null_resource.deploy_customer_service_agent,
-    null_resource.deploy_customer_agent,
-    null_resource.deploy_auditor_agent
+    null_resource.ensure_aiplatform_service_identities,
+    null_resource.deploy_customer_service_agent
   ]
 }
 
@@ -375,6 +416,8 @@ resource "null_resource" "deploy_customer_agent" {
     google_project_service.apis,
     google_bigquery_table.customer_ratings,
     google_compute_network_attachment.agent_engine_psc,
+    google_project_iam_member.aiplatform_sa_permissions,
+    google_project_iam_member.reasoning_engine_permissions,
     null_resource.prepare_agent_venv
   ]
 }
