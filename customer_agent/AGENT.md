@@ -81,11 +81,11 @@ In order to enable logging, telemetry, and Observability settings in Vertex AI A
 
 ---
 
-## 7. Model Authentication & Secret Manager Key Management
+## 7. Model Authentication via Vertex AI & Application Default Credentials (ADC)
 * **Underlying Foundation Model:** `gemini-3.8-flash` via Google Agent Development Kit (ADK 2.0) and `google.genai.Client`.
-* **Secret Manager Integration:** The simulator dynamically resolves its Gemini API key from Google Cloud Secret Manager under secret name `gemini-api-key` (with fallback to `google-api-key`) at runtime via `ensure_gemini_api_key()`.
-* **Zero Hardcoding Policy:** API keys and credentials must NEVER be stored in plaintext within source files or configuration files.
-* **Environment Synchronization:** On module load, `os.environ["GEMINI_API_KEY"]` and `os.environ["GOOGLE_API_KEY"]` are populated dynamically, enabling `google.genai.Client` and `GoogleLLM` to operate without `ValueError: No API key was provided`.
+* **Vertex AI ADC Integration:** The simulator authenticates to Gemini using **Vertex AI and Application Default Credentials (ADC)** (`vertexai=True`, `location="global"`) at runtime via `configure_vertex_ai_adc()`.
+* **Zero API Key Policy:** No Gemini API keys are required or stored in Secret Manager, source files, or configuration files.
+* **Environment Synchronization:** On module load, `GOOGLE_GENAI_USE_VERTEXAI=true` and `GOOGLE_CLOUD_LOCATION=global` are populated dynamically, enabling `google.genai.Client` and `GoogleLLM` to operate via IAM (`roles/aiplatform.user`) without any API key.
 
 ---
 

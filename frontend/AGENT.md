@@ -71,10 +71,10 @@ These library standards provide comprehensive Cloud Logging capture, OpenTelemet
 
 ---
 
-## 5. Model Authentication & Secret Manager Key Management
-* **Gemini Model Authentication:** The frontend and its coordinated agents dynamically load the Gemini API key from Google Cloud Secret Manager (`gemini-api-key` / `google-api-key`) via `ensure_gemini_api_key()`.
-* **Zero-Hardcoding Policy:** The application does not store API keys in plaintext or hardcode them in Dockerfiles or Cloud Run environment variables.
-* **Seamless Runtime Resolution:** On startup, `ensure_gemini_api_key()` populates `os.environ["GEMINI_API_KEY"]` and `os.environ["GOOGLE_API_KEY"]` dynamically, completely eliminating `ValueError: No API key was provided` across local and Cloud Run environments.
+## 5. Model Authentication via Vertex AI & Application Default Credentials (ADC)
+* **Gemini Model Authentication:** The frontend and its coordinated agents authenticate to Gemini (`gemini-3.8-flash`) via **Vertex AI using Application Default Credentials (ADC)** (`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_LOCATION=global`) through `configure_vertex_ai_adc()`.
+* **Zero API Key Requirement:** No Gemini API keys are required or stored in Secret Manager, Dockerfiles, or Cloud Run environment variables.
+* **Seamless Runtime Resolution:** On startup, `configure_vertex_ai_adc()` sets `GOOGLE_GENAI_USE_VERTEXAI=true` and `GOOGLE_CLOUD_LOCATION=global`, enabling `google.genai.Client(vertexai=True, ...)` and ADK `GoogleLLM` to authenticate with the active service account's IAM permissions (`roles/aiplatform.user`) across local and Cloud Run environments.
 
 ---
 

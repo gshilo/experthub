@@ -4,6 +4,9 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    GOOGLE_GENAI_USE_VERTEXAI=true \
+    GOOGLE_CLOUD_LOCATION=global \
+    VERTEX_AI_LOCATION=global \
     PORT=8080
 
 WORKDIR /app

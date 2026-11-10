@@ -22,8 +22,8 @@ import google.auth
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
+from google.adk.models import Gemini
 from google.cloud.alloydb.connector import Connector, IPTypes
-from google.cloud import secretmanager
 from google import genai
 from google.genai import types
 
@@ -36,6 +36,7 @@ PROJECT_ID = (
     or os.environ.get("GCP_PROJECT")
     or "experthub-510907"
 )
+VERTEX_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
 ALLOYDB_REGION = os.environ.get("ALLOYDB_REGION") or os.environ.get("GCP_REGION") or "us-central1"
 ALLOYDB_CLUSTER = os.environ.get("ALLOYDB_CLUSTER", "apex")
 ALLOYDB_INSTANCE = os.environ.get("ALLOYDB_INSTANCE", "apex")
@@ -43,90 +44,35 @@ ALLOYDB_DATABASE = os.environ.get("ALLOYDB_DATABASE", "apex")
 TABLE_ID = "customer_ratings"
 MODEL_NAME = "gemini-3.8-flash"
 
-
-_SECRET_CACHE: Dict[str, str] = {}
 _GENAI_CLIENT: Optional[genai.Client] = None
 _ALLOYDB_CONNECTOR: Optional[Connector] = None
 _ALLOYDB_TABLE_VERIFIED: bool = False
 
 
-def get_secret(secret_id: str, project: str = PROJECT_ID) -> str:
-    """Retrieves secret from Google Cloud Secret Manager with in-memory cache and fallback to env var.
-
-    API keys and credentials are never stored in static files.
-    """
-    cache_key = f"{project}:{secret_id}"
-    if cache_key in _SECRET_CACHE:
-        return _SECRET_CACHE[cache_key]
-
-    try:
-        client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project}/secrets/{secret_id}/versions/latest"
-        response = client.access_secret_version(request={"name": name})
-        secret_value = response.payload.data.decode("UTF-8").strip()
-        if secret_value:
-            _SECRET_CACHE[cache_key] = secret_value
-        logger.info(f"Retrieved secret '{secret_id}' directly from Secret Manager.")
-        return secret_value
-    except Exception as e:
-        logger.info(f"Could not retrieve secret '{secret_id}' from Secret Manager: {e}.")
-
-    # Fallback to env var if secret manager lookup fails
-    if secret_id in ("gemini-api-key", "google-api-key"):
-        env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if env_key:
-            val = env_key.strip()
-            _SECRET_CACHE[cache_key] = val
-            return val
-    return ""
-
-
-def is_placeholder_token(token: str) -> bool:
-    """Checks whether token is empty or an unconfigured placeholder."""
-    if not token:
-        return True
-    t = token.strip().upper()
-    return (
-        t.startswith("PLACEHOLDER")
-        or t.startswith("YOUR_")
-        or "PLACEHOLDER" in t
-        or t in ("DUMMY", "TEST", "NONE", "NULL")
-    )
-
-
-def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
-    """Ensures GEMINI_API_KEY / GOOGLE_API_KEY is retrieved directly from Secret Manager.
-
-    Retrieves secret from Google Cloud Secret Manager ('gemini-api-key' or fallback 'google-api-key')
-    and populates os.environ dynamically at runtime. The key is never read from or stored in static files.
-    """
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not is_placeholder_token(existing_key):
-        return existing_key
-
-    for secret_name in ("gemini-api-key", "google-api-key"):
-        val = get_secret(secret_name, project=project_id)
-        if val and not is_placeholder_token(val):
-            os.environ["GEMINI_API_KEY"] = val
-            os.environ["GOOGLE_API_KEY"] = val
-            logger.info(f"Dynamically loaded Gemini API key from Secret Manager secret '{secret_name}' (not static files).")
-            return val
-
-    logger.warning("No Gemini API key found in Secret Manager ('gemini-api-key') or environment.")
-    return None
+def configure_vertex_ai_adc(project_id: str = PROJECT_ID, location: str = VERTEX_LOCATION) -> None:
+    """Configures environment for Google GenAI SDK and ADK to use Vertex AI with ADC without API keys."""
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    os.environ["GOOGLE_CLOUD_LOCATION"] = location
+    os.environ.pop("GEMINI_API_KEY", None)
+    os.environ.pop("GOOGLE_API_KEY", None)
 
 
 def _get_genai_client() -> genai.Client:
-    """Returns a cached google.genai.Client instance for low-latency connection reuse."""
+    """Returns a cached google.genai.Client instance configured for Vertex AI via ADC."""
     global _GENAI_CLIENT
-    ensure_gemini_api_key(PROJECT_ID)
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
     if _GENAI_CLIENT is None:
-        _GENAI_CLIENT = genai.Client()
+        _GENAI_CLIENT = genai.Client(
+            vertexai=True,
+            project=PROJECT_ID,
+            location=VERTEX_LOCATION,
+        )
     return _GENAI_CLIENT
 
 
-# Ensure Gemini API key is loaded into environment from Secret Manager before agent execution
-ensure_gemini_api_key(PROJECT_ID)
+# Ensure Vertex AI ADC is configured before agent execution
+configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
 
 def _get_alloydb_connector() -> Connector:
@@ -534,7 +480,7 @@ def generate_customer_persona(
     Generates distinct mixtures of issue type, product type, customer personality,
     patience, and technical literacy on every conversation trigger, avoiding rigid repetition.
     """
-    ensure_gemini_api_key(PROJECT_ID)
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
     cat_seed = category_hint or random.choice(CATEGORY_SEEDS)
     prod_seed = random.choice(PRODUCT_DOMAIN_SEEDS)
@@ -630,7 +576,7 @@ def generate_customer_turn(
 
     Reflects the persona's authentic voice, emotional arc, patience, pushback, and circumstances.
     """
-    ensure_gemini_api_key(PROJECT_ID)
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
     cust_name = persona.get("customer_name", "Customer")
     product = persona.get("product", "purchased product")
@@ -719,7 +665,7 @@ def evaluate_customer_experience(
     model_name: str = MODEL_NAME,
 ) -> Tuple[int, str]:
     """Evaluates customer interaction CSAT rating (1-5) and feedback description reflecting authentic user satisfaction."""
-    ensure_gemini_api_key(PROJECT_ID)
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
     cust_name = persona.get("customer_name", "Customer")
     product = persona.get("product", "product")
@@ -821,7 +767,14 @@ root_agent = Agent(
         "simulates realistic multi-turn human pushback and dialogues, and evaluates experiences "
         "with authentic feedback persisted to AlloyDB (cluster 'apex', database 'apex', table 'customer_ratings')."
     ),
-    model="gemini-3.8-flash",
+    model=Gemini(
+        model="gemini-3.8-flash",
+        client_kwargs={
+            "vertexai": True,
+            "project": PROJECT_ID,
+            "location": VERTEX_LOCATION,
+        },
+    ),
     generate_content_config=types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_budget=0),
     ),

@@ -69,6 +69,7 @@ locals {
   reasoning_engine_roles = [
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
+    "roles/aiplatform.user",
     "roles/secretmanager.secretAccessor"
   ]
 }
@@ -133,32 +134,6 @@ resource "google_secret_manager_secret" "github_deploy_key" {
 
 resource "google_secret_manager_secret_iam_member" "sa_deploy_key_access" {
   secret_id = google_secret_manager_secret.github_deploy_key.secret_id
-  project   = var.project_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.app_service_account_email}"
-}
-
-# ==============================================================================
-# 3c. Google Cloud Secret Manager (Gemini API Key)
-# ==============================================================================
-resource "google_secret_manager_secret" "gemini_api_key" {
-  secret_id = "gemini-api-key"
-  project   = var.project_id
-
-  labels = {
-    app       = "experthub"
-    component = "gemini-api"
-  }
-
-  replication {
-    auto {}
-  }
-
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_secret_manager_secret_iam_member" "sa_gemini_api_key_access" {
-  secret_id = google_secret_manager_secret.gemini_api_key.secret_id
   project   = var.project_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.app_service_account_email}"
@@ -391,6 +366,18 @@ resource "google_cloud_run_v2_service" "frontend" {
       env {
         name  = "GCP_REGION"
         value = var.region
+      }
+      env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = "true"
+      }
+      env {
+        name  = "GOOGLE_CLOUD_LOCATION"
+        value = "global"
+      }
+      env {
+        name  = "VERTEX_AI_LOCATION"
+        value = "global"
       }
       env {
         name  = "BQ_LOCATION"

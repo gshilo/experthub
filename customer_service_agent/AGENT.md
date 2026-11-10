@@ -92,11 +92,11 @@ These version constraints and telemetry settings enable runtime OpenTelemetry ex
 
 ---
 
-## 7. Model Authentication & Secret Manager Key Management
+## 7. Model Authentication via Vertex AI & Application Default Credentials (ADC)
 * **Underlying Foundation Model:** `gemini-3.8-flash` via Google Agent Development Kit (ADK 2.0).
-* **Secret Manager Integration:** The agent dynamically resolves its Gemini API key from Google Cloud Secret Manager under secret name `gemini-api-key` (with fallback to `google-api-key`) at runtime via `ensure_gemini_api_key()`.
-* **Zero Hardcoding Policy:** API keys and credentials must NEVER be hardcoded into source code, container definitions, or environment files.
-* **Environment Synchronization:** On agent module initialization, the secret value is loaded into `os.environ["GEMINI_API_KEY"]` and `os.environ["GOOGLE_API_KEY"]`, guaranteeing that `google.genai.Client` and `GoogleLLM` authenticate seamlessly without raising `ValueError: No API key was provided`.
+* **Vertex AI ADC Integration:** The agent authenticates to Gemini via **Vertex AI and Application Default Credentials (ADC)** (`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_LOCATION=global`) at runtime via `configure_vertex_ai_adc()`.
+* **Zero API Key Policy:** No Gemini API keys are required or stored in Secret Manager, source code, container definitions, or environment files.
+* **Environment Synchronization:** On agent module initialization, `GOOGLE_GENAI_USE_VERTEXAI=true` and `GOOGLE_CLOUD_LOCATION=global` are configured in `os.environ`, guaranteeing that `google.genai.Client` and `GoogleLLM` authenticate seamlessly via IAM (`roles/aiplatform.user`).
 
 ---
 

@@ -49,13 +49,6 @@ variable "alloydb_password" {
   sensitive   = true
 }
 
-variable "gemini_api_key" {
-  type        = string
-  description = "Gemini API key stored in Cloud Secret Manager."
-  default     = "AIzaSy..."
-  sensitive   = true
-}
-
 variable "github_pat" {
   type        = string
   description = "GitHub Personal Access Token stored in Cloud Secret Manager."
@@ -173,6 +166,7 @@ locals {
   re_sa_roles = [
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
+    "roles/aiplatform.user",
     "roles/secretmanager.secretAccessor",
     "roles/alloydb.client",
     "roles/alloydb.databaseUser",
@@ -261,30 +255,6 @@ resource "google_project_iam_member" "bq_conn_sa_alloydb_client" {
 # ==============================================================================
 # STEP 4: Create Cloud Secret Manager Secrets
 # ==============================================================================
-
-# Gemini API Key secret
-resource "google_secret_manager_secret" "gemini_api_key" {
-  secret_id = "gemini-api-key"
-  project   = var.project_id
-
-  replication {
-    auto {}
-  }
-
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_secret_manager_secret_version" "gemini_api_key_version" {
-  secret      = google_secret_manager_secret.gemini_api_key.id
-  secret_data = var.gemini_api_key
-}
-
-resource "google_secret_manager_secret_iam_member" "gemini_api_key_compute_access" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.gemini_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.compute_sa}"
-}
 
 # GitHub Personal Access Token secret
 resource "google_secret_manager_secret" "github_pat" {

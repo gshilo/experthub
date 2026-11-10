@@ -26,11 +26,6 @@ output "secret_manager_github_pat" {
   value       = google_secret_manager_secret.github_pat.name
 }
 
-output "secret_manager_gemini_api_key" {
-  description = "Secret Manager secret name for Gemini API Key."
-  value       = google_secret_manager_secret.gemini_api_key.name
-}
-
 output "artifact_registry_repository" {
   description = "Artifact Registry Docker repository."
   value       = google_artifact_registry_repository.frontend_repo.name

@@ -41,25 +41,18 @@ The system consists of three specialized agents:
 
 ---
 
-## 2. Model Authentication & Secret Manager Credentials
+## 2. Model Authentication via Vertex AI & Application Default Credentials (ADC)
 
-### Zero Hardcoding Policy
-In accordance with Google Cloud enterprise security best practices:
-* **API keys are NEVER stored hardcoded in source code, configuration files, Dockerfiles, or git repositories.**
-* Credentials are securely provisioned and stored in **Google Cloud Secret Manager**.
+### Zero API Key & Zero Hardcoding Policy
+In accordance with Google Cloud security best practices and multi-student educational environment isolation:
+* **No Gemini API keys are required or stored in Secret Manager, source code, configuration files, Dockerfiles, or git repositories.**
+* All direct Python model calls (`customer_service_agent`, `customer_agent`, `auditor_agent`, and `frontend`) authenticate natively via **Application Default Credentials (ADC)** against **Vertex AI** (`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_LOCATION=global`).
 
-### Secret Manager Credential Inventory
-| Secret ID | Version | Description | Target Component |
-| :--- | :--- | :--- | :--- |
-| `gemini-api-key` | `latest` (v1) | Gemini API Key for model inference (`gemini-3.8-flash`) | Customer Service, Customer, Auditor, Frontend |
-| `google-api-key` | `latest` (v1) | Compatibility alias for Google GenAI SDK | Customer Service, Customer, Auditor, Frontend |
-
-### Dynamic Runtime Key Resolution (`ensure_gemini_api_key`)
-At application and agent startup, each component invokes `ensure_gemini_api_key(project_id)`:
-1. Inspects `os.environ` for existing `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
-2. If absent or placeholder, queries Google Cloud Secret Manager for secret `gemini-api-key` (falling back to `google-api-key`).
-3. Dynamically injects the retrieved key into `os.environ["GEMINI_API_KEY"]` and `os.environ["GOOGLE_API_KEY"]`.
-4. Initializes `google.genai.Client` and ADK `GoogleLLM`, completely eliminating the `ValueError: No API key was provided` runtime exception.
+### Runtime Vertex AI ADC Configuration (`configure_vertex_ai_adc`)
+At application and agent startup, each component invokes `configure_vertex_ai_adc(project_id, location="global")`:
+1. Sets `os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"`.
+2. Sets `os.environ["GOOGLE_CLOUD_PROJECT"] = project_id` and `os.environ["GOOGLE_CLOUD_LOCATION"] = "global"`.
+3. Initializes `google.genai.Client(vertexai=True, project=project_id, location="global")` and ADK `GoogleLLM` using the active service account's IAM permissions (`roles/aiplatform.user`), completely eliminating the need for any Gemini API keys.
 
 ---
 

@@ -50,6 +50,7 @@ if [[ -n "${1:-}" ]]; then
       for role in \
         "roles/bigquery.dataEditor" \
         "roles/bigquery.jobUser" \
+        "roles/aiplatform.user" \
         "roles/secretmanager.secretAccessor" \
         "roles/alloydb.client" \
         "roles/alloydb.databaseUser" \
@@ -97,7 +98,7 @@ if [[ -n "${1:-}" ]]; then
         --cpu=1 \
         --memory=512Mi \
         --timeout=300s \
-        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat" \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat" \
         --quiet
 
       FRONTEND_URL="$(gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)")"
@@ -118,7 +119,7 @@ fi
 # STEP 0: Set Your Environment Variables
 # ==============================================================================
 # Copy and run these export commands. Replace the placeholder values with your
-# own project ID, passwords, and API keys.
+# own project ID, passwords, and tokens.
 
 export PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
 # If PROJECT_ID is empty above, set it explicitly:
@@ -127,7 +128,6 @@ export PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
 export REGION="us-central1"
 export BQ_LOCATION="US"
 export ALLOYDB_PASSWORD="ChangeMeAlloyDB123!"
-export GEMINI_API_KEY="AIzaSy..."
 export GITHUB_PAT="ghp_..."
 
 export ALLOYDB_CLUSTER="apex"
@@ -207,6 +207,7 @@ gcloud beta services identity create --service=aiplatform.googleapis.com --proje
 sleep 10
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.dataEditor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/bigquery.jobUser"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/aiplatform.user"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/secretmanager.secretAccessor"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/alloydb.client"
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:${RE_SA}" --role="roles/alloydb.databaseUser"
@@ -226,14 +227,10 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 # STEP 4: Create Cloud Secret Manager Secrets
 # ==============================================================================
 
-# Create Gemini API Key secret
-echo -n "${GEMINI_API_KEY}" | gcloud secrets create gemini-api-key --data-file=- --replication-policy="automatic" --project="${PROJECT_ID}"
-
 # Create GitHub Personal Access Token secret
 echo -n "${GITHUB_PAT}" | gcloud secrets create github-pat --data-file=- --replication-policy="automatic" --project="${PROJECT_ID}"
 
-# Grant access on secrets to Compute Service Account
-gcloud secrets add-iam-policy-binding gemini-api-key --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
+# Grant access on secret to Compute Service Account
 gcloud secrets add-iam-policy-binding github-pat --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
 
 
@@ -370,6 +367,8 @@ python customer_service_agent/deploy.py --project="${PROJECT_ID}" --region="${RE
 cat << 'EOF' > customer_agent/.agent_engine_config.json
 {
   "env_vars": {
+    "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    "VERTEX_AI_LOCATION": "global",
     "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
     "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
   }
@@ -400,12 +399,12 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
   --region="${REGION}" \
   --project="${PROJECT_ID}" \
   --service-account="${COMPUTE_SA}" \
-  --allow-unauthenticated \
+  --no-invoker-iam-check \
   --port=8080 \
   --cpu=1 \
   --memory=512Mi \
   --timeout=300s \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat"
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,VERTEX_AI_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat"
 
 # Retrieve and print the deployed web application URL
 gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)"
