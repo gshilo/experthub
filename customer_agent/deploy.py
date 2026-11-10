@@ -88,6 +88,22 @@ def main():
 
     agent_dir = os.path.dirname(os.path.abspath(__file__))
 
+    config_path = os.path.join(agent_dir, ".agent_engine_config.json")
+    import json
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "env_vars": {
+                    "GOOGLE_GENAI_USE_VERTEXAI": "true",
+                    "VERTEX_AI_LOCATION": "global",
+                    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+                    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+                }
+            },
+            f,
+            indent=2,
+        )
+
     adk_bin = os.path.join(agent_dir, "..", ".venv", "bin", "adk")
     if not os.path.exists(adk_bin):
         adk_bin = "adk"

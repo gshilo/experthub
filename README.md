@@ -24,10 +24,10 @@ flowchart TD
         BQRatings["demo.customer_ratings<br/>(CSAT Scores 1-5)"]
     end
 
-    subgraph Knowledge["Open Knowledge Format (OKF) & Security"]
+    subgraph Knowledge["Open Knowledge Format (OKF) & Storage"]
         GCSBucket["Cloud Storage Bucket<br/>(instructions91)"]
         OKFFile["dynamic_context.md<br/>(OKF v0.2 Rules)"]
-        SecretMgr["Cloud Secret Manager<br/>(gemini-api-key)"]
+        SecretMgr["Cloud Secret Manager<br/>(github-pat)"]
     end
 
     CloudRun <-->|"Orchestrates Turns (2-5s Delay)"| CustAgent
@@ -39,12 +39,9 @@ flowchart TD
 
     AudAgent -->|"Queries Telemetry & Ratings"| BQTele
     AudAgent -->|"Queries Customer Feedback"| BQRatings
-    AudAgent -->|"Fetches Credentials"| SecretMgr
-    AudAgent -->|"Commits Refined OKF Rules"| GitHubRepo
-    GitHubRepo --- OKFFile
+    AudAgent -->|"Commits Refined OKF Rules"| GCSBucket
+    GCSBucket --- OKFFile
 
-    CSAgent -->|"Fetches Dynamic Key & SSH Key"| SecretMgr
-    CustAgent -->|"Fetches Dynamic Key"| SecretMgr
     CSAgent -->|"Pulls Dynamic Rules (2m TTL)"| OKFFile
 ```
 
@@ -183,8 +180,8 @@ google-adk>=1.18.0
 ### Step-by-Step Student CLI Deployment (`deploy_all.sh`)
 The [`deploy_all.sh`](file:///home/admin_gshilo_altostrat_com/experthub/deploy_all.sh) file is organized as a flat, sequential guide designed for students to copy and paste one command at a time directly into Google Cloud Shell (or terminal), without loops or subshells:
 
-1. **Set Environment Variables:** Export `PROJECT_ID`, `REGION`, `ALLOYDB_PASSWORD`, `GEMINI_API_KEY`, `GITHUB_PAT`.
-2. **Enable APIs & IAM:** Run `gcloud services enable` and individual role bindings.
+1. **Set Environment Variables:** Export `PROJECT_ID`, `REGION`, `ALLOYDB_PASSWORD`, `GITHUB_PAT`.
+2. **Enable APIs & IAM:** Run `gcloud services enable` and individual role bindings (including `roles/aiplatform.user` for Vertex AI ADC).
 3. **Provision Secrets & AlloyDB:** Create Secret Manager secrets, AlloyDB cluster, instance, and database.
 4. **Setup BigQuery:** Create datasets, Vertex AI & AlloyDB connections, and federated views.
 5. **Install Dependencies & Deploy Agents:** Activate virtual environment, install requirements, and deploy agents to Vertex AI Agent Engine.
@@ -214,21 +211,16 @@ gcloud services enable \
     artifactregistry.googleapis.com
 ```
 
-### Secret Manager Credential Provisioning (Zero-Hardcoding Policy)
-All credentials are securely resolved at runtime from Secret Manager and are never hardcoded:
+### Authentication & Secret Manager Provisioning
+All Gemini model requests authenticate via **Vertex AI using Application Default Credentials (ADC)** (`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_LOCATION=global`) without requiring any Gemini API key. Optional GitHub credentials are resolved from Secret Manager:
 
 ```bash
-# 1. Provision Gemini API Key for model inference
-echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets create gemini-api-key \
-    --data-file=- \
-    --replication-policy="automatic"
-
-# 2. Provision SSH Deploy Key for Git OKF rule synchronization
+# 1. Provision SSH Deploy Key for Git OKF rule synchronization (optional)
 gcloud secrets create github-deploy-key \
     --data-file=/path/to/id_ed25519 \
     --replication-policy="automatic"
 
-# 3. (Optional) Provision GitHub Personal Access Token (REST fallback)
+# 2. (Optional) Provision GitHub Personal Access Token (REST fallback)
 echo -n "YOUR_GITHUB_PAT" | gcloud secrets create github-pat \
     --data-file=- \
     --replication-policy="automatic"

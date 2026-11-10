@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import google.auth
 from google.adk.agents import Agent
 from google.adk.apps import App
+from google.adk.models import Gemini
 from google.cloud import bigquery
 from google.cloud import secretmanager
 from google.cloud import storage
@@ -34,6 +35,7 @@ PROJECT_ID = (
     or os.environ.get("GCP_PROJECT")
     or "experthub-510907"
 )
+VERTEX_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 OKF_BUCKET_NAME = os.environ.get("OKF_BUCKET_NAME", "instructions91")
 OKF_BUCKET_LOCATION = os.environ.get("OKF_BUCKET_LOCATION", "US")
@@ -45,12 +47,40 @@ NEW_VERSION_BRANCH = "new_version"
 OKF_FILENAME = "dynamic_context.md"
 OKF_FALLBACK_FILENAME = "dynamic_content.md"
 LATEST_AUDIT_QUERIES: List[Dict[str, Any]] = []
+_GENAI_CLIENT: Optional[Any] = None
+
+
+def configure_vertex_ai_adc(project_id: str = PROJECT_ID, location: str = VERTEX_LOCATION) -> None:
+    """Configures environment for Google GenAI SDK and ADK to use Vertex AI with ADC without API keys."""
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    os.environ["GOOGLE_CLOUD_LOCATION"] = location
+    os.environ.pop("GEMINI_API_KEY", None)
+    os.environ.pop("GOOGLE_API_KEY", None)
+
+
+def _get_genai_client():
+    """Returns a cached google.genai.Client instance configured for Vertex AI via ADC."""
+    global _GENAI_CLIENT
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
+    if _GENAI_CLIENT is None:
+        from google import genai
+        _GENAI_CLIENT = genai.Client(
+            vertexai=True,
+            project=PROJECT_ID,
+            location=VERTEX_LOCATION,
+        )
+    return _GENAI_CLIENT
+
+
+# Ensure Vertex AI ADC is configured before agent execution
+configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
 
 def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
     """Retrieves secret from Google Cloud Secret Manager with fallback to env var.
 
-    API keys and credentials are never stored in static files.
+    Credentials are never stored in static files.
     """
     try:
         client = secretmanager.SecretManagerServiceClient()
@@ -74,10 +104,6 @@ def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
         env_key = os.environ.get("GITHUB_DEPLOY_KEY") or os.environ.get("SSH_DEPLOY_KEY")
         if env_key:
             return env_key.strip()
-    elif secret_id in ("gemini-api-key", "google-api-key"):
-        env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if env_key:
-            return env_key.strip()
 
     return ""
 
@@ -93,32 +119,6 @@ def is_placeholder_token(token: str) -> bool:
         or "PLACEHOLDER" in t
         or t in ("DUMMY", "TEST", "NONE", "NULL")
     )
-
-
-def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
-    """Ensures GEMINI_API_KEY / GOOGLE_API_KEY is retrieved directly from Secret Manager.
-
-    Retrieves secret from Google Cloud Secret Manager ('gemini-api-key' or fallback 'google-api-key')
-    and populates os.environ dynamically at runtime. The key is never read from or stored in static files.
-    """
-    for secret_name in ("gemini-api-key", "google-api-key"):
-        val = get_secret(secret_name, project=project_id)
-        if val and not is_placeholder_token(val):
-            os.environ["GEMINI_API_KEY"] = val
-            os.environ["GOOGLE_API_KEY"] = val
-            logger.info(f"Dynamically loaded Gemini API key from Secret Manager secret '{secret_name}' (not static files).")
-            return val
-
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not is_placeholder_token(existing_key):
-        return existing_key
-
-    logger.warning("No Gemini API key found in Secret Manager ('gemini-api-key') or environment.")
-    return None
-
-
-# Ensure Gemini API key is loaded into environment from Secret Manager before agent execution
-ensure_gemini_api_key(PROJECT_ID)
 
 
 def execute_bigquery_query(query: str, project_id: str = PROJECT_ID) -> Dict[str, Any]:
@@ -2048,8 +2048,7 @@ Available BigQuery AI Functions (Connection `'us.gemini'`):
 def generate_dynamic_analysis_query(question: str, project_id: str = PROJECT_ID) -> Optional[Dict[str, Any]]:
     """Uses Gemini 3.8 Flash to interpret quantitative/visual user questions into BigQuery SQL with AI pushdown."""
     try:
-        from google import genai
-        client = genai.Client()
+        client = _get_genai_client()
         schema_guide = _get_telemetry_and_ai_schema_guide(project_id)
         prompt = f"""You are a BigQuery AI SQL and analytics expert for an e-commerce customer service platform.
 Convert this user analytics question into a read-only BigQuery SQL query:
@@ -2140,8 +2139,7 @@ def route_analysis_intent(
             formatted_history = "\n".join(turns)
 
     try:
-        from google import genai
-        client = genai.Client()
+        client = _get_genai_client()
         prompt = f"""You are the Lead Auditor & Quality Routing Intelligence for an e-commerce customer service platform.
 Classify the user inquiry and determine whether it should be served as:
 1. "chart_and_sql": ONLY if the inquiry is asking for a chart, plot, time-series trend, percentage over time, or quantitative distribution chart (e.g., "What is the percentage of positive customer interactions over time", "Show return rate by product chart", "Graph defect complaints").
@@ -2248,8 +2246,7 @@ def generate_conversational_audit_sql(
 
     schema_guide = _get_telemetry_and_ai_schema_guide(project_id)
     try:
-        from google import genai
-        client = genai.Client()
+        client = _get_genai_client()
         prompt = f"""You are the Lead BigQuery AI SQL Architect for the Auditor Agent.
 Write a read-only BigQuery SQL query (using `WITH ... SELECT ...` and a single `AI.GENERATE` pushdown) that answers this open-ended user question directly inside BigQuery:
 
@@ -2598,8 +2595,7 @@ def process_conversational_audit_query(
         else:
             # Dynamic SQL returned custom columns instead of markdown_response struct; format directly for the question
             try:
-                from google import genai
-                gclient = genai.Client()
+                gclient = _get_genai_client()
                 synth_prompt = f"""You are the Lead AI System Auditor. Format these BigQuery query results to directly answer the user's question.
 User Question: "{effective_q}"
 BigQuery Results JSON:
@@ -3677,7 +3673,14 @@ if _skill_toolset is not None:
 root_agent = Agent(
     name="auditor_agent",
     description="Multi-agent auditor analyzing telemetry, token efficiency, and authoring OKF rules.",
-    model="gemini-3.8-flash",
+    model=Gemini(
+        model="gemini-3.8-flash",
+        client_kwargs={
+            "vertexai": True,
+            "project": PROJECT_ID,
+            "location": VERTEX_LOCATION,
+        },
+    ),
     instruction=get_base_instructions(),
     tools=_auditor_tools,
 )

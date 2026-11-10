@@ -1,5 +1,7 @@
 {
   "env_vars": {
+    "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    "VERTEX_AI_LOCATION": "global",
     "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
     "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
   }

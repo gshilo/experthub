@@ -223,7 +223,7 @@ Execute these steps sequentially without stopping until the entire system is bui
 6. **Terraform Infrastructure as Code Deployment:**
    * Author and validate complete Terraform configuration under `terraform/` (`versions.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `terraform.tfvars`, `terraform.tfvars.example`, `README.md`).
    * Author executable wrapper script `deploy_terraform.sh`.
-   * Ensure declarative management of all GCP project services, IAM bindings, BigQuery datasets (`agent_telemetry`, `demo`), BigQuery table (`demo.customer_ratings`), Secret Manager secrets (`gemini-api-key`, `github-pat`, and `github-deploy-key`), Artifact Registry (`cloud-run-source-deploy`), and Cloud Run (`experthub-frontend`).
+   * Ensure declarative management of all GCP project services, IAM bindings, BigQuery datasets (`agent_telemetry`, `demo`), BigQuery table (`demo.customer_ratings`), Secret Manager secrets (`github-pat` and `github-deploy-key`), Artifact Registry (`cloud-run-source-deploy`), and Cloud Run (`experthub-frontend`).
 7. **Human-Like Customer Service Realism & Behavioral Hardening:**
    * Configure strict 2–3 sentence response length limits across `customer_service_agent/agent.py`, `customer_service_agent/AGENT.md`, and `frontend/app.py`.
    * Remove markdown bolding (`**`) and long dashes (`—`, `–`, `--`) from all agent instructions and implement runtime regex sanitization.
@@ -380,7 +380,7 @@ To enable end-to-end telemetry logging for the deployed Customer Service Agent:
    ```
 
 2. **Update Agent Model Configuration:**
-   * Foundation model is verified as `gemini-3.8-flash` in Google ADK 2.0 with Gemini API key authentication.
+   * Foundation model is verified as `gemini-3.8-flash` in Google ADK 2.0 with Vertex AI Application Default Credentials (`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_LOCATION=global`).
 
 3. **Redeploy Agent to Agent Engine:**
    ```bash
@@ -393,61 +393,25 @@ To enable end-to-end telemetry logging for the deployed Customer Service Agent:
 
 ---
 
-## 10. Secret Manager Authentication Architecture & Zero-Hardcoding Enforcement
+## 10. Vertex AI ADC Authentication Architecture & Zero API Key Enforcement
 
-### 1. Root Cause Analysis: `ValueError: No API key was provided`
-During live invocations of the Customer Service Agent (`customer_service_agent/agent.py`) utilizing Google ADK 2.0 and Gemini 3.8 Flash, `google.genai._api_client.BaseApiClient` raised:
-```text
-ValueError: No API key was provided. Please pass a valid API key. Learn how to create an API key at https://ai.google.dev/gemini-api/docs/api-key.
-```
-In Google ADK 2.0 with the `google-genai` SDK, `Agent(model="gemini-3.8-flash")` initializes a `GoogleLLM` client that expects `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `os.environ` when running outside Vertex AI default ADC service routing.
+### 1. Eliminating Gemini API Keys in Secret Manager
+To support multi-student educational environments without sharing or provisioning a personal Gemini API key in Secret Manager, all direct Python model calls (`customer_service_agent`, `customer_agent`, `auditor_agent`, and `frontend`) authenticate via **Application Default Credentials (ADC)** against **Vertex AI** (`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_LOCATION=global`).
 
-### 2. Zero-Hardcoding Policy & Secret Manager Provisioning
-In strict accordance with security requirements, the API key is **NEVER** stored hardcoded in source files, container manifests, Dockerfiles, or git commits.
-
-Instead, the credential is securely stored in **Google Cloud Secret Manager**:
-* **Secret Resource ID:** `projects/537563976049/secrets/gemini-api-key`
-* **Secret Version:** `projects/537563976049/secrets/gemini-api-key/versions/1` (Active)
-* **Compatibility Alias:** `projects/537563976049/secrets/google-api-key/versions/1`
-* **GCP Project:** `experthub-510907`
-* **IAM Permissions:** Service accounts `537563976049-compute@developer.gserviceaccount.com` and `service-537563976049@gcp-sa-aiplatform-re.iam.gserviceaccount.com` have `roles/secretmanager.secretAccessor`.
-
-### 3. Dynamic Runtime Key Resolution (`ensure_gemini_api_key`)
-To resolve the error cleanly without hardcoding, all agents (`customer_service_agent`, `customer_agent`, `auditor_agent`) and the `frontend` web application incorporate dynamic runtime key resolution:
+### 2. Runtime Vertex AI ADC Configuration (`configure_vertex_ai_adc`)
+All agents and the frontend web application invoke `configure_vertex_ai_adc(project_id, location="global")` at startup:
 
 ```python
-def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
-    """Ensures GEMINI_API_KEY / GOOGLE_API_KEY is configured in os.environ.
-    
-    If absent, retrieves it securely from Google Cloud Secret Manager ('gemini-api-key')
-    without storing it hardcoded anywhere in the codebase.
-    """
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not is_placeholder_token(existing_key):
-        return existing_key
-
-    for secret_name in ("gemini-api-key", "google-api-key"):
-        val = get_secret(secret_name, project=project_id)
-        if val and not is_placeholder_token(val):
-            os.environ["GEMINI_API_KEY"] = val
-            os.environ["GOOGLE_API_KEY"] = val
-            logger.info(f"Dynamically loaded Gemini API key from Secret Manager secret '{secret_name}'.")
-            return val
-
-    logger.warning("No Gemini API key found in environment or Secret Manager ('gemini-api-key').")
-    return None
+def configure_vertex_ai_adc(project_id: str = PROJECT_ID, location: str = VERTEX_LOCATION) -> None:
+    """Configures environment for Google GenAI SDK and ADK to use Vertex AI with ADC without API keys."""
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    os.environ["GOOGLE_CLOUD_LOCATION"] = location
+    os.environ.pop("GEMINI_API_KEY", None)
+    os.environ.pop("GOOGLE_API_KEY", None)
 ```
 
-On module load, `ensure_gemini_api_key()` dynamically retrieves the key from Secret Manager using Application Default Credentials (ADC) and injects it into `os.environ["GEMINI_API_KEY"]` and `os.environ["GOOGLE_API_KEY"]`. This ensures:
-1. `google.genai.Client` and `GoogleLLM` authenticate seamlessly.
-2. The agent is protected against hardcoded credential leakage.
-3. The Customer Service Agent runs smoothly in local test environments, Cloud Run, and Vertex AI Agent Engine.
-
-### 4. Secret Manager Credential Inventory
-| Secret Name | Purpose | Provisioned Path | Consumers |
-| :--- | :--- | :--- | :--- |
-| `gemini-api-key` | Gemini API Key for model inference (`gemini-3.8-flash`) | `projects/537563976049/secrets/gemini-api-key` | Customer Service Agent, Customer Agent, Auditor Agent, Frontend |
-| `google-api-key` | Google GenAI SDK alias | `projects/537563976049/secrets/google-api-key` | Customer Service Agent, Customer Agent, Auditor Agent, Frontend |
+On module load, `configure_vertex_ai_adc()` configures Vertex AI routing and ensures `google.genai.Client(vertexai=True, project=PROJECT_ID, location="global")` and `GoogleLLM` authenticate seamlessly using the active service account's IAM role (`roles/aiplatform.user`) in local test environments, Cloud Run, and Vertex AI Agent Engine.
 | `github-deploy-key` | SSH Ed25519 deploy key for Git operations on OKF repo | `projects/537563976049/secrets/github-deploy-key` | Auditor Agent, Customer Service Agent |
 | `github-pat` | GitHub Personal Access Token (REST fallback) | `projects/537563976049/secrets/github-pat` | Auditor Agent, Customer Service Agent |
 

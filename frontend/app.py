@@ -35,41 +35,20 @@ PROJECT_ID = (
     or os.environ.get("GCP_PROJECT")
     or "experthub-510907"
 )
+VERTEX_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 
 
-def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
-    """Ensures GEMINI_API_KEY / GOOGLE_API_KEY is retrieved directly from Secret Manager.
-
-    The API key is dynamically fetched from Google Cloud Secret Manager at runtime
-    and is never stored in static files or client-side assets.
-    """
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not existing_key.startswith("PLACEHOLDER"):
-        return existing_key
-
-    try:
-        from google.cloud import secretmanager
-        client = secretmanager.SecretManagerServiceClient()
-        for sname in ("gemini-api-key", "google-api-key"):
-            try:
-                name = f"projects/{project_id}/secrets/{sname}/versions/latest"
-                response = client.access_secret_version(request={"name": name})
-                val = response.payload.data.decode("UTF-8").strip()
-                if val and not val.startswith("PLACEHOLDER"):
-                    os.environ["GEMINI_API_KEY"] = val
-                    os.environ["GOOGLE_API_KEY"] = val
-                    logger.info(f"Loaded Gemini API key directly from Secret Manager '{sname}' (not from static files).")
-                    return val
-            except Exception:
-                continue
-    except Exception as e:
-        logger.warning(f"Could not load Gemini API key from Secret Manager: {e}")
-
-    return None
+def configure_vertex_ai_adc(project_id: str = PROJECT_ID, location: str = VERTEX_LOCATION) -> None:
+    """Configures environment for Google GenAI SDK and ADK to use Vertex AI with ADC without API keys."""
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    os.environ["GOOGLE_CLOUD_LOCATION"] = location
+    os.environ.pop("GEMINI_API_KEY", None)
+    os.environ.pop("GOOGLE_API_KEY", None)
 
 
-ensure_gemini_api_key(PROJECT_ID)
+configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
 # =====================================================================
 # Safe Import with Robust Fallbacks
@@ -691,12 +670,16 @@ _PREWARM_BUILDER_SEMAPHORE = threading.Semaphore(1)
 
 
 def _get_frontend_genai_client():
-    """Returns a cached google.genai.Client instance for frontend fallback turn generation."""
+    """Returns a cached google.genai.Client instance configured for Vertex AI via ADC."""
     global _FRONTEND_GENAI_CLIENT
-    ensure_gemini_api_key(PROJECT_ID)
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
     if _FRONTEND_GENAI_CLIENT is None:
         from google import genai
-        _FRONTEND_GENAI_CLIENT = genai.Client()
+        _FRONTEND_GENAI_CLIENT = genai.Client(
+            vertexai=True,
+            project=PROJECT_ID,
+            location=VERTEX_LOCATION,
+        )
     return _FRONTEND_GENAI_CLIENT
 
 
@@ -779,7 +762,7 @@ def _generate_dynamic_service_turn_static(
     last_customer_text: str,
 ) -> Tuple[str, List[str]]:
     """Generates a dynamic, in-character customer service turn using Gemini 3.8 Flash."""
-    ensure_gemini_api_key(PROJECT_ID)
+    configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
     prod = persona.get("product", "item")
     cust_name = persona.get("customer_name", "Customer")
     order_id = persona.get("order_id", "ORD-1001")

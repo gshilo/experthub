@@ -1,5 +1,3 @@
-bigquery_agent_analytics:
-  project_id: experthub-510907
-  dataset_id: agent_telemetry
-  table_id: agent_events
-  dataset_location: US
+# BigQueryAgentAnalyticsPlugin is configured programmatically in customer_service_agent/agent.py
+# with BigQueryLoggerConfig (flush_on_run_end=True, create_views=True, batch_size=1).
+# Leaving this file commented prevents ADK's api_server from registering a duplicate plugin instance.

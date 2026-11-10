@@ -19,6 +19,7 @@ from google.genai import types
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
+from google.adk.models import Gemini
 from google.adk.plugins.bigquery_agent_analytics_plugin import (
     BigQueryAgentAnalyticsPlugin,
     BigQueryLoggerConfig,
@@ -37,6 +38,7 @@ PROJECT_ID = (
     or "experthub-510907"
 )
 LOCATION = os.environ.get("GCP_REGION", "us-central1")
+VERTEX_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 DEPLOY_KEY_SECRET_NAME = os.environ.get("GITHUB_DEPLOY_KEY_SECRET_NAME", "github-deploy-key")
 SECRET_NAME = os.environ.get("GITHUB_SECRET_NAME", "github-pat")
@@ -56,10 +58,23 @@ _OKF_CACHE_LOCK = threading.Lock()
 _OKF_CACHE_TTL = 120.0  # seconds (2 minutes)
 
 
+def configure_vertex_ai_adc(project_id: str = PROJECT_ID, location: str = VERTEX_LOCATION) -> None:
+    """Configures environment for Google GenAI SDK and ADK to use Vertex AI with ADC without API keys."""
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    os.environ["GOOGLE_CLOUD_LOCATION"] = location
+    os.environ.pop("GEMINI_API_KEY", None)
+    os.environ.pop("GOOGLE_API_KEY", None)
+
+
+# Ensure Vertex AI ADC is configured before agent execution
+configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
+
+
 def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
     """Retrieves secret from Google Cloud Secret Manager with in-memory cache and fallback to env var.
 
-    API keys and credentials are never stored in static files.
+    Credentials are never stored in static files.
     """
     cache_key = f"{project}:{secret_id}"
     if cache_key in _SECRET_CACHE:
@@ -90,10 +105,6 @@ def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
         env_key = os.environ.get("GITHUB_DEPLOY_KEY") or os.environ.get("SSH_DEPLOY_KEY")
         if env_key:
             val = env_key.strip()
-    elif secret_id in ("gemini-api-key", "google-api-key"):
-        env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if env_key:
-            val = env_key.strip()
 
     if val:
         _SECRET_CACHE[cache_key] = val
@@ -111,32 +122,6 @@ def is_placeholder_token(token: str) -> bool:
         or "PLACEHOLDER" in t
         or t in ("DUMMY", "TEST", "NONE", "NULL")
     )
-
-
-def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
-    """Ensures GEMINI_API_KEY / GOOGLE_API_KEY is retrieved directly from Secret Manager.
-
-    Retrieves secret from Google Cloud Secret Manager ('gemini-api-key' or fallback 'google-api-key')
-    and populates os.environ dynamically at runtime. The key is never read from or stored in static files.
-    """
-    existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if existing_key and not is_placeholder_token(existing_key):
-        return existing_key
-
-    for secret_name in ("gemini-api-key", "google-api-key"):
-        val = get_secret(secret_name, project=project_id)
-        if val and not is_placeholder_token(val):
-            os.environ["GEMINI_API_KEY"] = val
-            os.environ["GOOGLE_API_KEY"] = val
-            logger.info(f"Dynamically loaded Gemini API key from Secret Manager secret '{secret_name}' (not static files).")
-            return val
-
-    logger.warning("No Gemini API key found in Secret Manager ('gemini-api-key') or environment.")
-    return None
-
-
-# Ensure Gemini API key is loaded into environment from Secret Manager before agent execution
-ensure_gemini_api_key(PROJECT_ID)
 
 
 def ensure_okf_bucket(
@@ -712,7 +697,14 @@ except Exception as e:
 root_agent = Agent(
     name="customer_service_agent",
     description="Customer Support Specialist for electronics and home appliances.",
-    model="gemini-3.8-flash",
+    model=Gemini(
+        model="gemini-3.8-flash",
+        client_kwargs={
+            "vertexai": True,
+            "project": PROJECT_ID,
+            "location": VERTEX_LOCATION,
+        },
+    ),
     generate_content_config=types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_budget=0),
         temperature=0.7,
