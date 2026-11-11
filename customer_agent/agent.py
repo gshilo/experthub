@@ -111,7 +111,10 @@ def _get_alloydb_iam_user() -> str:
         return email[: -len(".gserviceaccount.com")]
     if email:
         return email
-    return "537563976049-compute@developer"
+    raise RuntimeError(
+        "Could not resolve the AlloyDB IAM database user from ADC or the metadata server; "
+        "set ALLOYDB_IAM_USER explicitly."
+    )
 
 
 def _connect_alloydb(
@@ -125,8 +128,10 @@ def _connect_alloydb(
     )
     iam_user = _get_alloydb_iam_user()
     connector = _get_alloydb_connector()
-    ip_type_str = os.environ.get("ALLOYDB_IP_TYPE", "PSC").upper()
-    ip_type = getattr(IPTypes, ip_type_str, IPTypes.PSC)
+    # PUBLIC works from Cloud Run / Agent Engine without VPC egress; the connector
+    # still enforces mTLS + IAM. Use PSC only when a PSC endpoint and DNS are provisioned.
+    ip_type_str = os.environ.get("ALLOYDB_IP_TYPE", "PUBLIC").upper()
+    ip_type = getattr(IPTypes, ip_type_str, IPTypes.PUBLIC)
     return connector.connect(
         instance_uri,
         "pg8000",
@@ -177,9 +182,16 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
             try:
                 cur.execute(f"GRANT ALL PRIVILEGES ON SCHEMA public TO PUBLIC")
                 cur.execute(f"GRANT ALL PRIVILEGES ON TABLE {TABLE_ID} TO PUBLIC")
-            except Exception:
-                pass
+            except Exception as grant_err:
+                logger.info(f"Skipped GRANT on '{TABLE_ID}' (caller is not the owner): {grant_err}")
+            cur.execute("SELECT has_table_privilege(current_user, %s, 'INSERT')", (TABLE_ID,))
+            can_insert = bool(cur.fetchone()[0])
             cur.close()
+            if not can_insert:
+                raise PermissionError(
+                    f"AlloyDB user lacks INSERT on '{TABLE_ID}'; grant it as postgres: "
+                    f'GRANT INSERT, SELECT ON {TABLE_ID} TO "{_get_alloydb_iam_user()}"'
+                )
             _ALLOYDB_TABLE_VERIFIED = True
             logger.info(
                 f"AlloyDB table '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}' verified."
@@ -187,7 +199,7 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
         finally:
             conn.close()
     except Exception as e:
-        logger.warning(
+        logger.error(
             f"Could not verify/create AlloyDB table '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}': {e}. "
             "Will retry on rating write."
         )
@@ -195,10 +207,6 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
 
 # Backward-compatible alias
 ensure_bigquery_ratings_table = ensure_alloydb_ratings_table
-
-# Ensure database and table exist on startup
-ensure_alloydb_ratings_table(PROJECT_ID)
-
 
 def write_customer_rating_to_alloydb(
     customer_id: int,
@@ -258,7 +266,7 @@ def write_customer_rating_to_alloydb(
         finally:
             conn.close()
     except Exception as e:
-        logger.warning(
+        logger.exception(
             f"Could not write rating to AlloyDB '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}': {e}. "
             f"Data: {row}"
         )

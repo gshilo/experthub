@@ -343,8 +343,15 @@ resource "google_alloydb_instance" "primary" {
     allowed_consumer_projects = [local.project_number]
   }
 
+  # Public IP lets Cloud Run reach AlloyDB via the AlloyDB connector (mTLS + IAM)
+  # without VPC egress or a PSC endpoint. No authorized networks are added.
+  network_config {
+    enable_public_ip = true
+  }
+
   database_flags = {
-    "alloydb.iam_authentication" = "on"
+    "alloydb.iam_authentication"  = "on"
+    "password.enforce_complexity" = "on" # required by AlloyDB when public IP is enabled
   }
 
   client_connection_config {
@@ -352,6 +359,16 @@ resource "google_alloydb_instance" "primary" {
       ssl_mode = "ENCRYPTED_ONLY"
     }
   }
+}
+
+# IAM database user for the Compute SA that the Cloud Run frontend runs as.
+resource "google_alloydb_user" "compute_sa_iam_user" {
+  cluster        = google_alloydb_cluster.cluster.name
+  user_id        = trimsuffix(local.compute_sa, ".gserviceaccount.com")
+  user_type      = "ALLOYDB_IAM_USER"
+  database_roles = ["alloydbsuperuser"]
+
+  depends_on = [google_alloydb_instance.primary]
 }
 
 # ==============================================================================

@@ -85,6 +85,9 @@ if [[ -n "${1:-}" ]]; then
       export FRONTEND_SERVICE="${FRONTEND_SERVICE:-experthub-frontend}"
       export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions91}"
       export OKF_BUCKET_LOCATION="${OKF_BUCKET_LOCATION:-US}"
+      export ALLOYDB_CLUSTER="${ALLOYDB_CLUSTER:-apex}"
+      export ALLOYDB_INSTANCE="${ALLOYDB_INSTANCE:-apex}"
+      export ALLOYDB_DATABASE="${ALLOYDB_DATABASE:-apex}"
 
       echo "Project ID: ${PROJECT_ID}"
       echo "Deploying Cloud Run service: ${FRONTEND_SERVICE} in region: ${REGION}..."
@@ -98,7 +101,7 @@ if [[ -n "${1:-}" ]]; then
         --cpu=1 \
         --memory=512Mi \
         --timeout=300s \
-        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat" \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat,ALLOYDB_REGION=${REGION},ALLOYDB_CLUSTER=${ALLOYDB_CLUSTER},ALLOYDB_INSTANCE=${ALLOYDB_INSTANCE},ALLOYDB_DATABASE=${ALLOYDB_DATABASE},ALLOYDB_IP_TYPE=PUBLIC" \
         --quiet
 
       FRONTEND_URL="$(gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)")"
@@ -266,22 +269,38 @@ gcloud alloydb clusters create "${ALLOYDB_CLUSTER}" \
   --project="${PROJECT_ID}"
 
 # 2. Create AlloyDB Primary Instance (takes ~5-10 minutes)
+# A public IP lets Cloud Run reach AlloyDB through the AlloyDB connector without
+# VPC egress or a PSC endpoint. No authorized networks are added: the connector
+# authenticates with mTLS + IAM.
 gcloud alloydb instances create "${ALLOYDB_INSTANCE}" \
   --cluster="${ALLOYDB_CLUSTER}" \
   --region="${REGION}" \
   --instance-type="PRIMARY" \
   --cpu-count=2 \
   --allowed-psc-projects="${PROJECT_NUMBER}" \
-  --database-flags="alloydb.iam_authentication=on" \
+  --assign-inbound-public-ip=ASSIGN_IPV4 \
+  --database-flags="alloydb.iam_authentication=on,password.enforce_complexity=on" \
   --ssl-mode="ENCRYPTED_ONLY" \
+  --project="${PROJECT_ID}"
+
+
+# 3. Create the IAM database user the frontend (Cloud Run, Compute SA) logs in as.
+#    alloydbsuperuser lets the app create database 'apex' and table customer_ratings
+#    on first write if they do not exist yet.
+gcloud alloydb users create "${COMPUTE_SA%.gserviceaccount.com}" \
+  --cluster="${ALLOYDB_CLUSTER}" \
+  --region="${REGION}" \
+  --type=IAM_BASED \
+  --db-roles=alloydbsuperuser \
   --project="${PROJECT_ID}"
 
 
 # ------------------------------------------------------------------------------
 # TABLE INITIALIZATION IN GOOGLE CLOUD CONSOLE / ALLOYDB STUDIO:
 # Navigate to: Google Cloud Console -> AlloyDB -> Clusters -> apex -> apex instance -> AlloyDB Studio
-# Authenticate using user: postgres and your $ALLOYDB_PASSWORD, select database 'apex',
-# and execute the following SQL statement:
+# Authenticate using user: postgres and your $ALLOYDB_PASSWORD, select database 'postgres'
+# and run:  CREATE DATABASE apex;
+# Then switch to database 'apex' and execute the following SQL statement:
 #
 # CREATE TABLE IF NOT EXISTS customer_ratings (
 #     customer_id BIGINT NOT NULL,
@@ -322,7 +341,7 @@ export ACCESS_TOKEN="$(gcloud auth print-access-token)"
 curl -X POST "https://bigqueryconnection.googleapis.com/v1/projects/${PROJECT_ID}/locations/${BQ_LOCATION}/connections?connectionId=alloydb" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "{\"friendlyName\":\"alloydb\",\"configuration\":{\"connectorId\":\"google-alloydb\",\"asset\":{\"googleCloudResource\":\"${ALLOYDB_RESOURCE}\",\"database\":\"postgres\"},\"authentication\":{\"usernamePassword\":{\"username\":\"postgres\",\"password\":{\"plaintext\":\"${ALLOYDB_PASSWORD}\"}}}}}"
+  -d "{\"friendlyName\":\"alloydb\",\"configuration\":{\"connectorId\":\"google-alloydb\",\"asset\":{\"googleCloudResource\":\"${ALLOYDB_RESOURCE}\",\"database\":\"${ALLOYDB_DATABASE}\"},\"authentication\":{\"usernamePassword\":{\"username\":\"postgres\",\"password\":{\"plaintext\":\"${ALLOYDB_PASSWORD}\"}}}}}"
 
 # 5. Create BigQuery Federated Views pointing to AlloyDB
 bq mk --use_legacy_sql=false \
@@ -404,7 +423,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
   --cpu=1 \
   --memory=512Mi \
   --timeout=300s \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,VERTEX_AI_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat"
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,VERTEX_AI_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat,ALLOYDB_REGION=${REGION},ALLOYDB_CLUSTER=${ALLOYDB_CLUSTER},ALLOYDB_INSTANCE=${ALLOYDB_INSTANCE},ALLOYDB_DATABASE=${ALLOYDB_DATABASE},ALLOYDB_IP_TYPE=PUBLIC"
 
 # Retrieve and print the deployed web application URL
 gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)"

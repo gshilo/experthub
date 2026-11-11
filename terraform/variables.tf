@@ -107,3 +107,27 @@ variable "allow_public_allusers" {
   default     = false
 }
 
+
+variable "alloydb_region" {
+  type        = string
+  description = "AlloyDB region. Defaults to var.region when empty."
+  default     = ""
+}
+
+variable "alloydb_cluster" {
+  type        = string
+  description = "AlloyDB cluster ID the frontend writes customer ratings to."
+  default     = "apex"
+}
+
+variable "alloydb_instance" {
+  type        = string
+  description = "AlloyDB primary instance ID."
+  default     = "apex"
+}
+
+variable "alloydb_database" {
+  type        = string
+  description = "AlloyDB database holding the customer_ratings table."
+  default     = "apex"
+}

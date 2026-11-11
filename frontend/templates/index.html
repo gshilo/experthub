@@ -994,7 +994,7 @@
       </div>
     </div>
     <div class="badges">
-      <span class="badge">Project: <strong style="color: #60a5fa;">experthub-510907</strong></span>
+      <span class="badge">Project: <strong style="color: #60a5fa;">{{ project_id }}</strong></span>
       <span class="badge">Model: <strong>gemini-3.8-flash</strong></span>
       <span class="badge">Framework: <strong>ADK 2.0</strong></span>
       <span class="badge badge-active" id="system-status-badge">● Systems Active</span>
@@ -1073,7 +1073,7 @@
             <div class="rating-banner" id="rating-box" style="display: none;">
               <div class="stars" id="rating-stars">★★★★★</div>
               <div class="rating-text">
-                <div style="font-weight: 600; color: #fbbf24; margin-bottom: 0.2rem;" id="rating-title">Customer Feedback Persisted to BigQuery</div>
+                <div style="font-weight: 600; color: #fbbf24; margin-bottom: 0.2rem;" id="rating-title">Customer Feedback Persisted to AlloyDB</div>
                 <div id="rating-desc" style="color: #cbd5e1;">-</div>
               </div>
             </div>
@@ -1754,7 +1754,7 @@
           appendMessage('Customer service', 'Apex Support AI', d.text, 'chat-service', d.timestamp, d.tools_used);
         } else if (eventType === 'rating') {
           removeTypingIndicator();
-          showRating(d.rating, d.description, d.timestamp);
+          showRating(d.rating, d.description, d.timestamp, d.persisted);
         } else if (eventType === 'complete') {
           removeTypingIndicator();
           finishSession('Session completed');
@@ -1844,7 +1844,7 @@
       chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: 'smooth' });
     }
 
-    function showRating(rating, desc, timestamp) {
+    function showRating(rating, desc, timestamp, persisted) {
       const box = document.getElementById('rating-box');
       const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
       document.getElementById('rating-stars').innerText = stars;
@@ -1855,7 +1855,10 @@
           tsText = ` • ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
         } catch (_) {}
       }
-      document.getElementById('rating-desc').innerText = `"${desc}" (Score: ${rating}/5${tsText})`;
+      let dbText = '';
+      if (persisted === true) dbText = ' • saved to AlloyDB';
+      else if (persisted === false) dbText = ' • NOT saved to AlloyDB (see server logs)';
+      document.getElementById('rating-desc').innerText = `"${desc}" (Score: ${rating}/5${tsText}${dbText})`;
       box.style.display = 'flex';
     }
 

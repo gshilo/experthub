@@ -234,8 +234,11 @@ except Exception as e:
         project_id: str = PROJECT_ID,
     ) -> bool:
         ts = timestamp or datetime.now(timezone.utc).isoformat()
-        logger.info(f"[Fallback] Recorded rating ({rating}/5) for {customer_name} at {ts}: {description}")
-        return True
+        logger.error(
+            f"[Fallback] customer_agent import failed; rating ({rating}/5) for {customer_name} at {ts} "
+            f"was NOT persisted to AlloyDB: {description}"
+        )
+        return False
 
     write_customer_rating_to_bigquery = write_customer_rating_to_alloydb
 
@@ -1563,17 +1566,7 @@ class SimulationSession:
             self._sleep_interruptible(rem_eval_delay)
 
             now_iso = datetime.now(timezone.utc).isoformat()
-            try:
-                write_customer_rating_to_alloydb(
-                    customer_id=cust_id,
-                    customer_name=cust_name,
-                    rating=rating,
-                    description=description,
-                    timestamp=now_iso,
-                    project_id=PROJECT_ID,
-                )
-            except Exception as db_err:
-                logger.warning(f"AlloyDB rating persistence note: {db_err}")
+            persisted = self._persist_rating(cust_id, cust_name, rating, description, now_iso)
 
             self.emit(
                 "rating",
@@ -1582,6 +1575,7 @@ class SimulationSession:
                     "rating": rating,
                     "description": description,
                     "timestamp": now_iso,
+                    "persisted": persisted,
                 },
             )
 
@@ -1603,18 +1597,52 @@ class SimulationSession:
                     "tools_used": ["system_diagnostics"],
                 },
             )
+            fallback_id = self.persona.get("customer_id", 100001)
+            fallback_desc = "Session completed with system assistance."
+            fallback_ts = datetime.now(timezone.utc).isoformat()
+            persisted = self._persist_rating(
+                fallback_id,
+                self.persona.get("customer_name", "Customer"),
+                3,
+                fallback_desc,
+                fallback_ts,
+            )
             self.emit(
                 "rating",
                 {
-                    "customer_id": self.persona.get("customer_id", 100001),
+                    "customer_id": fallback_id,
                     "rating": 3,
-                    "description": "Session completed with system assistance.",
+                    "description": fallback_desc,
+                    "timestamp": fallback_ts,
+                    "persisted": persisted,
                 },
             )
             self.emit("complete", {"status": "SUCCESS"})
 
         finally:
             self.is_finished = True
+
+    def _persist_rating(
+        self, customer_id: int, customer_name: str, rating: int, description: str, timestamp: str
+    ) -> bool:
+        """Writes the rating to AlloyDB and returns whether the row was actually inserted."""
+        try:
+            persisted = bool(
+                write_customer_rating_to_alloydb(
+                    customer_id=customer_id,
+                    customer_name=customer_name,
+                    rating=rating,
+                    description=description,
+                    timestamp=timestamp,
+                    project_id=PROJECT_ID,
+                )
+            )
+        except Exception as db_err:
+            logger.exception(f"AlloyDB rating persistence failed for session {self.session_id}: {db_err}")
+            persisted = False
+        if not persisted:
+            logger.error(f"Rating for session {self.session_id} was NOT persisted to AlloyDB.")
+        return persisted
 
     def _evaluate_session(self) -> Tuple[int, str]:
         """Evaluates customer interaction rating (1-5) and feedback description reflecting authentic user satisfaction."""
@@ -1661,7 +1689,7 @@ class SimulationSession:
 def index():
     """Serves the web dashboard and ensures pre-warmed conversation pool is topped up."""
     ensure_prewarm_pool(PREWARM_POOL_TARGET)
-    return render_template("index.html")
+    return render_template("index.html", project_id=PROJECT_ID)
 
 
 @app.after_request

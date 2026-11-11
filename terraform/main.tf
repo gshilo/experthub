@@ -388,6 +388,26 @@ resource "google_cloud_run_v2_service" "frontend" {
         value = var.secret_name
       }
       env {
+        name  = "ALLOYDB_REGION"
+        value = var.alloydb_region != "" ? var.alloydb_region : var.region
+      }
+      env {
+        name  = "ALLOYDB_CLUSTER"
+        value = var.alloydb_cluster
+      }
+      env {
+        name  = "ALLOYDB_INSTANCE"
+        value = var.alloydb_instance
+      }
+      env {
+        name  = "ALLOYDB_DATABASE"
+        value = var.alloydb_database
+      }
+      env {
+        name  = "ALLOYDB_IP_TYPE"
+        value = "PUBLIC"
+      }
+      env {
         name  = "CUSTOMER_SERVICE_AGENT_ID"
         value = var.customer_service_agent_id
       }
