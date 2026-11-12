@@ -3,6 +3,15 @@
     "GOOGLE_GENAI_USE_VERTEXAI": "true",
     "VERTEX_AI_LOCATION": "global",
     "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
+    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+    "BQ_LOCATION": "US",
+    "OKF_BUCKET_NAME": "my-db-demos-instructions91",
+    "OKF_BUCKET_LOCATION": "US",
+    "GITHUB_SECRET_NAME": "github-pat",
+    "ALLOYDB_REGION": "us-central1",
+    "ALLOYDB_CLUSTER": "apex",
+    "ALLOYDB_INSTANCE": "apex",
+    "ALLOYDB_DATABASE": "apex",
+    "ALLOYDB_IP_TYPE": "PUBLIC"
   }
 }

@@ -8,6 +8,19 @@ import sys
 from typing import Optional
 
 
+PASSTHROUGH_ENV_VARS = (
+    "BQ_LOCATION",
+    "OKF_BUCKET_NAME",
+    "OKF_BUCKET_LOCATION",
+    "GITHUB_SECRET_NAME",
+    "ALLOYDB_REGION",
+    "ALLOYDB_CLUSTER",
+    "ALLOYDB_INSTANCE",
+    "ALLOYDB_DATABASE",
+    "ALLOYDB_IP_TYPE",
+)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Deploy Auditor Agent to Vertex AI Agent Engine.")
     parser.add_argument(
@@ -82,19 +95,18 @@ def main():
 
     config_path = os.path.join(agent_dir, ".agent_engine_config.json")
     import json
+    env_vars = {
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "VERTEX_AI_LOCATION": "global",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+    }
+    # Forward per-project lab settings (bucket, AlloyDB target) when set in the shell.
+    for key in PASSTHROUGH_ENV_VARS:
+        if os.environ.get(key):
+            env_vars[key] = os.environ[key]
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "env_vars": {
-                    "GOOGLE_GENAI_USE_VERTEXAI": "true",
-                    "VERTEX_AI_LOCATION": "global",
-                    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-                    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
-                }
-            },
-            f,
-            indent=2,
-        )
+        json.dump({"env_vars": env_vars}, f, indent=2)
 
     adk_bin = os.path.join(agent_dir, "..", ".venv", "bin", "adk")
     if not os.path.exists(adk_bin):

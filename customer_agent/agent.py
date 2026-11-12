@@ -15,10 +15,8 @@ import os
 import random
 import re
 import time
-import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-import google.auth
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
@@ -41,6 +39,9 @@ ALLOYDB_REGION = os.environ.get("ALLOYDB_REGION") or os.environ.get("GCP_REGION"
 ALLOYDB_CLUSTER = os.environ.get("ALLOYDB_CLUSTER", "apex")
 ALLOYDB_INSTANCE = os.environ.get("ALLOYDB_INSTANCE", "apex")
 ALLOYDB_DATABASE = os.environ.get("ALLOYDB_DATABASE", "apex")
+# Built-in AlloyDB user (hard-coded for the lab).
+ALLOYDB_USER = "postgres"
+ALLOYDB_PASSWORD = "apex1234"
 TABLE_ID = "customer_ratings"
 MODEL_NAME = "gemini-3.8-flash"
 
@@ -79,65 +80,30 @@ def _get_alloydb_connector() -> Connector:
     """Returns a cached AlloyDB Python Connector instance."""
     global _ALLOYDB_CONNECTOR
     if _ALLOYDB_CONNECTOR is None:
-        _ALLOYDB_CONNECTOR = Connector(refresh_strategy="lazy", enable_iam_auth=True)
+        _ALLOYDB_CONNECTOR = Connector(refresh_strategy="lazy")
     return _ALLOYDB_CONNECTOR
-
-
-def _get_alloydb_iam_user() -> str:
-    """Resolves the AlloyDB IAM database username from the active service account."""
-    explicit_user = os.environ.get("ALLOYDB_IAM_USER")
-    if explicit_user:
-        return explicit_user.strip()
-
-    email = ""
-    try:
-        credentials, _ = google.auth.default()
-        email = getattr(credentials, "service_account_email", "") or ""
-    except Exception:
-        pass
-
-    if not email or email == "default":
-        try:
-            req = urllib.request.Request(
-                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
-                headers={"Metadata-Flavor": "Google"},
-            )
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                email = resp.read().decode("utf-8").strip()
-        except Exception:
-            pass
-
-    if email and email.endswith(".gserviceaccount.com"):
-        return email[: -len(".gserviceaccount.com")]
-    if email:
-        return email
-    raise RuntimeError(
-        "Could not resolve the AlloyDB IAM database user from ADC or the metadata server; "
-        "set ALLOYDB_IAM_USER explicitly."
-    )
 
 
 def _connect_alloydb(
     db_name: str = ALLOYDB_DATABASE,
     project_id: str = PROJECT_ID,
 ):
-    """Creates a pg8000 DB-API connection to AlloyDB via PSC and IAM Database Authentication."""
+    """Creates a pg8000 DB-API connection to AlloyDB with the built-in postgres user."""
     instance_uri = (
         f"projects/{project_id}/locations/{ALLOYDB_REGION}/"
         f"clusters/{ALLOYDB_CLUSTER}/instances/{ALLOYDB_INSTANCE}"
     )
-    iam_user = _get_alloydb_iam_user()
     connector = _get_alloydb_connector()
     # PUBLIC works from Cloud Run / Agent Engine without VPC egress; the connector
-    # still enforces mTLS + IAM. Use PSC only when a PSC endpoint and DNS are provisioned.
+    # still enforces mTLS. Use PSC only when a PSC endpoint and DNS are provisioned.
     ip_type_str = os.environ.get("ALLOYDB_IP_TYPE", "PUBLIC").upper()
     ip_type = getattr(IPTypes, ip_type_str, IPTypes.PUBLIC)
     return connector.connect(
         instance_uri,
         "pg8000",
-        user=iam_user,
+        user=ALLOYDB_USER,
+        password=ALLOYDB_PASSWORD,
         db=db_name,
-        enable_iam_auth=True,
         ip_type=ip_type,
     )
 
@@ -190,7 +156,7 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
             if not can_insert:
                 raise PermissionError(
                     f"AlloyDB user lacks INSERT on '{TABLE_ID}'; grant it as postgres: "
-                    f'GRANT INSERT, SELECT ON {TABLE_ID} TO "{_get_alloydb_iam_user()}"'
+                    f'GRANT INSERT, SELECT ON {TABLE_ID} TO "{ALLOYDB_USER}"'
                 )
             _ALLOYDB_TABLE_VERIFIED = True
             logger.info(
