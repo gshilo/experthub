@@ -1,5 +1,5 @@
 # ==============================================================================
-# init.tf - Terraform Configuration for Steps 1-5 of deploy_all.sh
+# init.tf - Standalone Terraform Configuration for Lab Infrastructure (Steps 1-5)
 # ==============================================================================
 
 terraform {
@@ -45,7 +45,7 @@ variable "bq_location" {
 variable "alloydb_password" {
   type        = string
   description = "Initial password for the AlloyDB postgres user."
-  default     = "ChangeMeAlloyDB123!"
+  default     = "apex1234"
   sensitive   = true
 }
 
@@ -71,13 +71,13 @@ variable "alloydb_instance" {
 variable "alloydb_database" {
   type        = string
   description = "AlloyDB database name."
-  default     = "apex"
+  default     = "postgres"
 }
 
 variable "okf_bucket_name" {
   type        = string
-  description = "Google Cloud Storage bucket name for OKF dynamic context."
-  default     = "instructions91"
+  description = "Google Cloud Storage bucket name for OKF dynamic context (defaults to instructions-<project_id> when empty)."
+  default     = ""
 }
 
 variable "okf_bucket_location" {
@@ -105,7 +105,8 @@ data "google_project" "current" {
 }
 
 locals {
-  project_number = data.google_project.current.number
+  project_number           = data.google_project.current.number
+  effective_okf_bucket     = var.okf_bucket_name != "" ? var.okf_bucket_name : "instructions-${var.project_id}"
 
   # Service account email addresses for IAM bindings
   compute_sa = "${local.project_number}-compute@developer.gserviceaccount.com"
@@ -126,6 +127,8 @@ locals {
     "bigquery.googleapis.com",
     "bigqueryconnection.googleapis.com",
     "alloydb.googleapis.com",
+    "servicenetworking.googleapis.com",
+    "dns.googleapis.com",
     "cloudbuild.googleapis.com",
     "artifactregistry.googleapis.com",
     "compute.googleapis.com",
@@ -143,6 +146,51 @@ resource "google_project_service" "apis" {
 }
 
 # ==============================================================================
+# STEP 2B: Network & PSC Attachment Configuration
+# ==============================================================================
+
+data "google_compute_network" "default" {
+  project    = var.project_id
+  name       = "default"
+  depends_on = [google_project_service.apis]
+}
+
+# Reserve an IP range for Private Service Access (PSA)
+resource "google_compute_global_address" "private_ip_alloc" {
+  name          = "alloydb-psa-range"
+  project       = var.project_id
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = data.google_compute_network.default.id
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_service_networking_connection" "vpc_connection" {
+  network                 = data.google_compute_network.default.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.private_ip_alloc.name]
+
+  depends_on = [google_project_service.apis]
+}
+
+# Private Service Connect network attachment for Vertex AI Agent Engine
+resource "google_compute_network_attachment" "agent_engine_psc" {
+  name                  = "agent-engine-psc-na"
+  project               = var.project_id
+  region                = var.region
+  description           = "Private Service Connect network attachment for Vertex AI Agent Engine"
+  connection_preference = "ACCEPT_AUTOMATIC"
+
+  subnetworks = [
+    "projects/${var.project_id}/regions/${var.region}/subnetworks/default"
+  ]
+
+  depends_on = [google_project_service.apis]
+}
+
+# ==============================================================================
 # STEP 3: Configure IAM Permissions
 # ==============================================================================
 
@@ -154,6 +202,9 @@ locals {
     "roles/aiplatform.user",
     "roles/alloydb.client",
     "roles/alloydb.databaseUser",
+    "roles/compute.networkAdmin",
+    "roles/dns.peer",
+    "roles/serviceusage.serviceUsageConsumer",
     "roles/run.admin",
     "roles/run.invoker",
     "roles/iam.serviceAccountUser",
@@ -170,12 +221,18 @@ locals {
     "roles/secretmanager.secretAccessor",
     "roles/alloydb.client",
     "roles/alloydb.databaseUser",
+    "roles/compute.networkAdmin",
+    "roles/dns.peer",
+    "roles/serviceusage.serviceUsageConsumer",
     "roles/storage.objectAdmin",
   ]
 
   vertex_sa_roles = [
     "roles/alloydb.client",
     "roles/alloydb.databaseUser",
+    "roles/compute.networkAdmin",
+    "roles/dns.peer",
+    "roles/serviceusage.serviceUsageConsumer",
   ]
 }
 
@@ -285,7 +342,7 @@ resource "google_secret_manager_secret_iam_member" "github_pat_compute_access" {
 # ==============================================================================
 
 resource "google_storage_bucket" "okf_bucket" {
-  name                        = var.okf_bucket_name
+  name                        = local.effective_okf_bucket
   project                     = var.project_id
   location                    = var.okf_bucket_location
   uniform_bucket_level_access = true
@@ -309,7 +366,7 @@ resource "google_storage_bucket_iam_member" "okf_bucket_re_admin" {
 }
 
 # ==============================================================================
-# STEP 5: Provision AlloyDB Cluster, Instance & Database
+# STEP 5: Provision AlloyDB Cluster, Instance & IAM Database Users
 # ==============================================================================
 
 resource "google_alloydb_cluster" "cluster" {
@@ -343,15 +400,41 @@ resource "google_alloydb_instance" "primary" {
     allowed_consumer_projects = [local.project_number]
   }
 
+  # Public IP enables Cloud Run and Vertex AI Agent Engine to connect securely via
+  # the AlloyDB Python Connector (mTLS + IAM) without VPC egress or PSC DNS setup.
+  # No authorized_external_networks are added, so direct unauthenticated TCP is blocked.
+  network_config {
+    enable_public_ip = true
+  }
+
   database_flags = {
-    "alloydb.iam_authentication" = "on"
+    "alloydb.iam_authentication"     = "on"
+    "password.enforce_complexity"    = "on"
+    "password.min_pass_length"       = "8"
+    "password.min_uppercase_letters" = "0"
+    "password.min_lowercase_letters" = "0"
+    "password.min_numerical_chars"   = "0"
+    "password.min_special_chars"     = "0"
   }
 
   client_connection_config {
     ssl_config {
-      ssl_mode = "ENCRYPTED_ONLY"
+      ssl_mode = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
     }
   }
+}
+
+# IAM database user for the Default Compute SA (used by Cloud Run frontend)
+resource "google_alloydb_user" "compute_sa_iam_user" {
+  cluster        = google_alloydb_cluster.cluster.name
+  user_id        = trimsuffix(local.compute_sa, ".gserviceaccount.com")
+  user_type      = "ALLOYDB_IAM_USER"
+  database_roles = ["alloydbsuperuser"]
+
+  depends_on = [
+    google_alloydb_instance.primary,
+    google_project_iam_member.compute_sa_roles,
+  ]
 }
 
 # ==============================================================================

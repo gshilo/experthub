@@ -2,17 +2,45 @@
 """Deployment script for Customer Service Agent to Vertex AI Agent Engine."""
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 from typing import Optional
 
 
+PASSTHROUGH_ENV_VARS = (
+    "BQ_LOCATION",
+    "OKF_BUCKET_NAME",
+    "OKF_BUCKET_LOCATION",
+    "GITHUB_SECRET_NAME",
+)
+
+
+def get_default_project() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj and env_proj.strip():
+        return env_proj.strip()
+    try:
+        res = subprocess.run(
+            ["gcloud", "config", "get-value", "project"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        proj = res.stdout.strip()
+        if res.returncode == 0 and proj and proj != "(unset)":
+            return proj
+    except Exception:
+        pass
+    return "experthub-510907"
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Deploy Customer Service Agent to Vertex AI Agent Engine.")
     parser.add_argument(
         "--project",
-        default=os.environ.get("GOOGLE_CLOUD_PROJECT", "experthub-510907"),
+        default=get_default_project(),
         help="Google Cloud project ID.",
     )
     parser.add_argument(
@@ -53,11 +81,19 @@ def parse_args():
 def find_existing_agent_engine_id(project: str, region: str, display_name: str) -> Optional[str]:
     try:
         import vertexai
+        client = vertexai.Client(project=project, location=region)
+        for re_obj in client.agent_engines.list():
+            if re_obj.api_resource.display_name == display_name:
+                return re_obj.api_resource.name.split("/")[-1]
+    except Exception:
+        pass
+    try:
+        import vertexai
         from vertexai.preview import reasoning_engines
         vertexai.init(project=project, location=region)
-        for re in reasoning_engines.ReasoningEngine.list():
-            if re.display_name == display_name:
-                return re.resource_name.split("/")[-1]
+        for re_obj in reasoning_engines.ReasoningEngine.list():
+            if re_obj.display_name == display_name:
+                return re_obj.resource_name.split("/")[-1]
     except Exception:
         pass
     return None
@@ -79,24 +115,25 @@ def main():
     print("=" * 70)
 
     agent_dir = os.path.dirname(os.path.abspath(__file__))
-
     config_path = os.path.join(agent_dir, ".agent_engine_config.json")
-    import json
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "env_vars": {
-                    "GOOGLE_GENAI_USE_VERTEXAI": "true",
-                    "VERTEX_AI_LOCATION": "global",
-                    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-                    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
-                }
-            },
-            f,
-            indent=2,
-        )
 
-    # Check for required ADK binary
+    base_env_vars = {
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "VERTEX_AI_LOCATION": "global",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+    }
+    deploy_env_vars = dict(base_env_vars)
+    deploy_env_vars["GOOGLE_CLOUD_PROJECT"] = args.project
+    deploy_env_vars["OKF_BUCKET_NAME"] = os.environ.get("OKF_BUCKET_NAME") or f"instructions-{args.project}"
+    for key in PASSTHROUGH_ENV_VARS:
+        if os.environ.get(key):
+            deploy_env_vars[key] = os.environ[key]
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump({"env_vars": deploy_env_vars}, f, indent=2)
+        f.write("\n")
+
     adk_bin = os.path.join(agent_dir, "..", ".venv", "bin", "adk")
     if not os.path.exists(adk_bin):
         adk_bin = "adk"
@@ -117,11 +154,14 @@ def main():
 
     print(f"Executing command: {' '.join(cmd)}")
     if args.dry_run:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump({"env_vars": base_env_vars}, f, indent=2)
+            f.write("\n")
         print("[DRY-RUN] Staging validated. Skipping actual remote API call.")
         return 0
 
     try:
-        result = subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, input="n\n", text=True, check=True)
         print("Customer Service Agent deployed successfully to Vertex AI Agent Engine.")
         return result.returncode
     except subprocess.CalledProcessError as e:
@@ -131,6 +171,13 @@ def main():
     except FileNotFoundError:
         print(f"Error: ADK CLI '{adk_bin}' not found.", file=sys.stderr)
         return 1
+    finally:
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump({"env_vars": base_env_vars}, f, indent=2)
+                f.write("\n")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

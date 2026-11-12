@@ -37,8 +37,8 @@ variable "use_existing_service_account" {
 
 variable "existing_service_account_email" {
   type        = string
-  description = "Email of the existing service account to use if use_existing_service_account is true."
-  default     = "537563976049-compute@developer.gserviceaccount.com"
+  description = "Email of the existing service account to use if use_existing_service_account is true (defaults to project Compute Engine default SA when empty)."
+  default     = ""
 }
 
 variable "service_account_id" {
@@ -105,5 +105,41 @@ variable "allow_public_allusers" {
   type        = bool
   description = "Whether to bind roles/run.invoker to allUsers. Keep false if organization policies restrict domain sharing."
   default     = false
+}
+
+variable "okf_bucket_name" {
+  type        = string
+  description = "GCS bucket name for dynamic_context.md (defaults to instructions-<project_id> when empty)."
+  default     = ""
+}
+
+variable "alloydb_region" {
+  type        = string
+  description = "AlloyDB region (defaults to var.region when empty)."
+  default     = ""
+}
+
+variable "alloydb_cluster" {
+  type        = string
+  description = "AlloyDB cluster ID."
+  default     = "apex"
+}
+
+variable "alloydb_instance" {
+  type        = string
+  description = "AlloyDB primary instance ID."
+  default     = "apex"
+}
+
+variable "alloydb_database" {
+  type        = string
+  description = "AlloyDB database holding customer_ratings."
+  default     = "postgres"
+}
+
+variable "alloydb_ip_type" {
+  type        = string
+  description = "AlloyDB connector IP type (PUBLIC or PSC)."
+  default     = "PUBLIC"
 }
 

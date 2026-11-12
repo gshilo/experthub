@@ -30,11 +30,22 @@ logger = logging.getLogger("frontend_app")
 
 app = Flask(__name__)
 
-PROJECT_ID = (
-    os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("GCP_PROJECT")
-    or "experthub-510907"
-)
+
+def _resolve_project_id() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj and env_proj.strip():
+        return env_proj.strip()
+    try:
+        import google.auth
+        _, default_proj = google.auth.default()
+        if default_proj:
+            return default_proj.strip()
+    except Exception:
+        pass
+    return "experthub-510907"
+
+
+PROJECT_ID = _resolve_project_id()
 VERTEX_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 
@@ -234,8 +245,11 @@ except Exception as e:
         project_id: str = PROJECT_ID,
     ) -> bool:
         ts = timestamp or datetime.now(timezone.utc).isoformat()
-        logger.info(f"[Fallback] Recorded rating ({rating}/5) for {customer_name} at {ts}: {description}")
-        return True
+        logger.error(
+            f"[Fallback] customer_agent import failed; rating ({rating}/5) for {customer_name} at {ts} "
+            f"was NOT persisted to AlloyDB: {description}"
+        )
+        return False
 
     write_customer_rating_to_bigquery = write_customer_rating_to_alloydb
 
@@ -1563,17 +1577,7 @@ class SimulationSession:
             self._sleep_interruptible(rem_eval_delay)
 
             now_iso = datetime.now(timezone.utc).isoformat()
-            try:
-                write_customer_rating_to_alloydb(
-                    customer_id=cust_id,
-                    customer_name=cust_name,
-                    rating=rating,
-                    description=description,
-                    timestamp=now_iso,
-                    project_id=PROJECT_ID,
-                )
-            except Exception as db_err:
-                logger.warning(f"AlloyDB rating persistence note: {db_err}")
+            persisted = self._persist_rating(cust_id, cust_name, rating, description, now_iso)
 
             self.emit(
                 "rating",
@@ -1582,6 +1586,7 @@ class SimulationSession:
                     "rating": rating,
                     "description": description,
                     "timestamp": now_iso,
+                    "persisted": persisted,
                 },
             )
 
@@ -1590,7 +1595,10 @@ class SimulationSession:
             else:
                 self.emit("complete", {"status": "SUCCESS"})
 
-            logger.info(f"Session {self.session_id} finished successfully with score {rating}/5 ({turn_counter} turns)")
+            logger.info(
+                f"Session {self.session_id} finished with score {rating}/5 "
+                f"({turn_counter} turns, persisted_to_alloydb={persisted})"
+            )
 
         except Exception as e:
             logger.exception(f"Unexpected error in simulation loop {self.session_id}: {e}")
@@ -1603,18 +1611,58 @@ class SimulationSession:
                     "tools_used": ["system_diagnostics"],
                 },
             )
+            fallback_id = self.persona.get("customer_id", 100001)
+            fallback_desc = "Session completed with system assistance."
+            fallback_ts = datetime.now(timezone.utc).isoformat()
+            persisted = self._persist_rating(
+                fallback_id,
+                self.persona.get("customer_name", "Customer"),
+                3,
+                fallback_desc,
+                fallback_ts,
+            )
             self.emit(
                 "rating",
                 {
-                    "customer_id": self.persona.get("customer_id", 100001),
+                    "customer_id": fallback_id,
                     "rating": 3,
-                    "description": "Session completed with system assistance.",
+                    "description": fallback_desc,
+                    "timestamp": fallback_ts,
+                    "persisted": persisted,
                 },
             )
             self.emit("complete", {"status": "SUCCESS"})
 
         finally:
             self.is_finished = True
+
+    def _persist_rating(
+        self, customer_id: int, customer_name: str, rating: int, description: str, timestamp: str
+    ) -> bool:
+        """Writes the rating to AlloyDB, invalidates analytics caches on success, and logs errors on failure."""
+        global ANALYTICS_SUMMARY_CACHE, ANALYTICS_CHARTS_CACHE, CUSTOMER_ANALYSIS_CACHE
+        try:
+            persisted = bool(
+                write_customer_rating_to_alloydb(
+                    customer_id=customer_id,
+                    customer_name=customer_name,
+                    rating=rating,
+                    description=description,
+                    timestamp=timestamp,
+                    project_id=PROJECT_ID,
+                )
+            )
+        except Exception as db_err:
+            logger.exception(f"AlloyDB rating persistence failed for session {self.session_id}: {db_err}")
+            persisted = False
+
+        if persisted:
+            ANALYTICS_SUMMARY_CACHE = None
+            ANALYTICS_CHARTS_CACHE = None
+            CUSTOMER_ANALYSIS_CACHE = None
+        else:
+            logger.error(f"Rating for session {self.session_id} was NOT persisted to AlloyDB.")
+        return persisted
 
     def _evaluate_session(self) -> Tuple[int, str]:
         """Evaluates customer interaction rating (1-5) and feedback description reflecting authentic user satisfaction."""
@@ -1661,7 +1709,7 @@ class SimulationSession:
 def index():
     """Serves the web dashboard and ensures pre-warmed conversation pool is topped up."""
     ensure_prewarm_pool(PREWARM_POOL_TARGET)
-    return render_template("index.html")
+    return render_template("index.html", project_id=PROJECT_ID)
 
 
 @app.after_request

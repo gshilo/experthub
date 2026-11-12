@@ -83,8 +83,12 @@ if [[ -n "${1:-}" ]]; then
       export REGION="${REGION:-us-central1}"
       export BQ_LOCATION="${BQ_LOCATION:-US}"
       export FRONTEND_SERVICE="${FRONTEND_SERVICE:-experthub-frontend}"
-      export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions91}"
+      export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions-${PROJECT_ID}}"
       export OKF_BUCKET_LOCATION="${OKF_BUCKET_LOCATION:-US}"
+      export ALLOYDB_CLUSTER="${ALLOYDB_CLUSTER:-apex}"
+      export ALLOYDB_INSTANCE="${ALLOYDB_INSTANCE:-apex}"
+      export ALLOYDB_DATABASE="${ALLOYDB_DATABASE:-postgres}"
+      export ALLOYDB_IP_TYPE="${ALLOYDB_IP_TYPE:-PUBLIC}"
 
       echo "Project ID: ${PROJECT_ID}"
       echo "Deploying Cloud Run service: ${FRONTEND_SERVICE} in region: ${REGION}..."
@@ -98,7 +102,7 @@ if [[ -n "${1:-}" ]]; then
         --cpu=1 \
         --memory=512Mi \
         --timeout=300s \
-        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat" \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,VERTEX_AI_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat,ALLOYDB_REGION=${REGION},ALLOYDB_CLUSTER=${ALLOYDB_CLUSTER},ALLOYDB_INSTANCE=${ALLOYDB_INSTANCE},ALLOYDB_DATABASE=${ALLOYDB_DATABASE},ALLOYDB_IP_TYPE=${ALLOYDB_IP_TYPE}" \
         --quiet
 
       FRONTEND_URL="$(gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)")"
@@ -127,15 +131,16 @@ export PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
 
 export REGION="us-central1"
 export BQ_LOCATION="US"
-export ALLOYDB_PASSWORD="ChangeMeAlloyDB123!"
+export ALLOYDB_PASSWORD="apex1234"
 export GITHUB_PAT="ghp_..."
 
 export ALLOYDB_CLUSTER="apex"
 export ALLOYDB_INSTANCE="apex"
-export ALLOYDB_DATABASE="apex"
+export ALLOYDB_DATABASE="postgres"
+export ALLOYDB_IP_TYPE="PUBLIC"
 export ARTIFACT_REPO="experthub-repo"
 export FRONTEND_SERVICE="experthub-frontend"
-export OKF_BUCKET_NAME="instructions91"
+export OKF_BUCKET_NAME="instructions-${PROJECT_ID}"
 export OKF_BUCKET_LOCATION="US"
 
 
@@ -272,15 +277,31 @@ gcloud alloydb instances create "${ALLOYDB_INSTANCE}" \
   --instance-type="PRIMARY" \
   --cpu-count=2 \
   --allowed-psc-projects="${PROJECT_NUMBER}" \
-  --database-flags="alloydb.iam_authentication=on" \
-  --ssl-mode="ENCRYPTED_ONLY" \
+  --assign-inbound-public-ip=ASSIGN_IPV4 \
+  --database-flags="alloydb.iam_authentication=on,password.enforce_complexity=on,password.min_pass_length=8,password.min_uppercase_letters=0,password.min_lowercase_letters=0,password.min_numerical_chars=0,password.min_special_chars=0" \
+  --ssl-mode="ALLOW_UNENCRYPTED_AND_ENCRYPTED" \
+  --project="${PROJECT_ID}"
+
+# 3. Create AlloyDB IAM Database Users for Compute SA and Reasoning Engine SA
+gcloud alloydb users create "${COMPUTE_SA%.gserviceaccount.com}" \
+  --cluster="${ALLOYDB_CLUSTER}" \
+  --region="${REGION}" \
+  --type=IAM_BASED \
+  --db-roles=alloydbsuperuser \
+  --project="${PROJECT_ID}"
+
+gcloud alloydb users create "${RE_SA%.gserviceaccount.com}" \
+  --cluster="${ALLOYDB_CLUSTER}" \
+  --region="${REGION}" \
+  --type=IAM_BASED \
+  --db-roles=alloydbsuperuser \
   --project="${PROJECT_ID}"
 
 
 # ------------------------------------------------------------------------------
 # TABLE INITIALIZATION IN GOOGLE CLOUD CONSOLE / ALLOYDB STUDIO:
 # Navigate to: Google Cloud Console -> AlloyDB -> Clusters -> apex -> apex instance -> AlloyDB Studio
-# Authenticate using user: postgres and your $ALLOYDB_PASSWORD, select database 'apex',
+# Authenticate using user: postgres and your $ALLOYDB_PASSWORD, select database 'postgres',
 # and execute the following SQL statement:
 #
 # CREATE TABLE IF NOT EXISTS customer_ratings (
@@ -340,8 +361,8 @@ bq mk --use_legacy_sql=false \
 # STEP 7: Clone Application Repository & Prepare Python Virtual Environment
 # ==============================================================================
 
-# 1. Clone repository branch 'cloudday' and change directory
-git clone -b cloudday https://github.com/gshilo/experthub.git
+# 1. Clone repository branch 'guy' and change directory
+git clone -b guy https://github.com/gshilo/experthub.git
 cd experthub
 
 # 2. Create and activate Python virtual environment
@@ -364,16 +385,6 @@ pip install -r frontend/requirements.txt
 python customer_service_agent/deploy.py --project="${PROJECT_ID}" --region="${REGION}" --otel_to_cloud
 
 # Deploy Customer Simulator Agent
-cat << 'EOF' > customer_agent/.agent_engine_config.json
-{
-  "env_vars": {
-    "GOOGLE_GENAI_USE_VERTEXAI": "true",
-    "VERTEX_AI_LOCATION": "global",
-    "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
-  }
-}
-EOF
 python customer_agent/deploy.py --project="${PROJECT_ID}" --region="${REGION}" --otel_to_cloud
 
 # Deploy Auditor Agent
@@ -391,8 +402,12 @@ export COMPUTE_SA="${COMPUTE_SA:-${PROJECT_NUMBER}-compute@developer.gserviceacc
 export REGION="${REGION:-us-central1}"
 export BQ_LOCATION="${BQ_LOCATION:-US}"
 export FRONTEND_SERVICE="${FRONTEND_SERVICE:-experthub-frontend}"
-export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions91}"
+export OKF_BUCKET_NAME="${OKF_BUCKET_NAME:-instructions-${PROJECT_ID}}"
 export OKF_BUCKET_LOCATION="${OKF_BUCKET_LOCATION:-US}"
+export ALLOYDB_CLUSTER="${ALLOYDB_CLUSTER:-apex}"
+export ALLOYDB_INSTANCE="${ALLOYDB_INSTANCE:-apex}"
+export ALLOYDB_DATABASE="${ALLOYDB_DATABASE:-postgres}"
+export ALLOYDB_IP_TYPE="${ALLOYDB_IP_TYPE:-PUBLIC}"
 
 gcloud run deploy "${FRONTEND_SERVICE}" \
   --source . \
@@ -404,7 +419,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
   --cpu=1 \
   --memory=512Mi \
   --timeout=300s \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,VERTEX_AI_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat"
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_LOCATION=global,VERTEX_AI_LOCATION=global,BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat,ALLOYDB_REGION=${REGION},ALLOYDB_CLUSTER=${ALLOYDB_CLUSTER},ALLOYDB_INSTANCE=${ALLOYDB_INSTANCE},ALLOYDB_DATABASE=${ALLOYDB_DATABASE},ALLOYDB_IP_TYPE=${ALLOYDB_IP_TYPE}"
 
 # Retrieve and print the deployed web application URL
 gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)"

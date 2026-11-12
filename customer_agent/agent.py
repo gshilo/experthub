@@ -3,7 +3,7 @@
 Built with Google Agent Development Kit (ADK 2.0), powered by Gemini 3.8 Flash (gemini-3.8-flash).
 Generates live, highly varied customer personas, issues, and multi-turn human dialogues
 on every conversation trigger, with realistic human pacing and automated post-conversation
-feedback persistence to AlloyDB (cluster 'apex', database 'apex', table 'customer_ratings').
+feedback persistence to AlloyDB (cluster 'apex', database 'postgres', table 'customer_ratings').
 """
 
 from __future__ import annotations
@@ -31,21 +31,35 @@ from google.genai import types
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("customer_agent")
 
-PROJECT_ID = (
-    os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("GCP_PROJECT")
-    or "experthub-510907"
-)
+
+def _resolve_project_id() -> str:
+    env_proj = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if env_proj and env_proj.strip():
+        return env_proj.strip()
+    try:
+        _, default_proj = google.auth.default()
+        if default_proj:
+            return default_proj.strip()
+    except Exception:
+        pass
+    return "experthub-510907"
+
+
+PROJECT_ID = _resolve_project_id()
 VERTEX_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
 ALLOYDB_REGION = os.environ.get("ALLOYDB_REGION") or os.environ.get("GCP_REGION") or "us-central1"
 ALLOYDB_CLUSTER = os.environ.get("ALLOYDB_CLUSTER", "apex")
 ALLOYDB_INSTANCE = os.environ.get("ALLOYDB_INSTANCE", "apex")
-ALLOYDB_DATABASE = os.environ.get("ALLOYDB_DATABASE", "apex")
+ALLOYDB_DATABASE = os.environ.get("ALLOYDB_DATABASE", "postgres")
+ALLOYDB_USER = os.environ.get("ALLOYDB_USER", "postgres")
+ALLOYDB_PASSWORD = os.environ.get("ALLOYDB_PASSWORD", "apex1234")
 TABLE_ID = "customer_ratings"
 MODEL_NAME = "gemini-3.8-flash"
 
 _GENAI_CLIENT: Optional[genai.Client] = None
-_ALLOYDB_CONNECTOR: Optional[Connector] = None
+_ALLOYDB_IAM_CONNECTOR: Optional[Connector] = None
+_ALLOYDB_PWD_CONNECTOR: Optional[Connector] = None
+_ALLOYDB_IAM_AUTH_FAILED: bool = False
 _ALLOYDB_TABLE_VERIFIED: bool = False
 
 
@@ -75,19 +89,26 @@ def _get_genai_client() -> genai.Client:
 configure_vertex_ai_adc(PROJECT_ID, VERTEX_LOCATION)
 
 
-def _get_alloydb_connector() -> Connector:
-    """Returns a cached AlloyDB Python Connector instance."""
-    global _ALLOYDB_CONNECTOR
-    if _ALLOYDB_CONNECTOR is None:
-        _ALLOYDB_CONNECTOR = Connector(refresh_strategy="lazy", enable_iam_auth=True)
-    return _ALLOYDB_CONNECTOR
+def _get_alloydb_connector(enable_iam_auth: bool = True) -> Connector:
+    """Returns a cached AlloyDB Python Connector instance for IAM or password auth."""
+    global _ALLOYDB_IAM_CONNECTOR, _ALLOYDB_PWD_CONNECTOR
+    if enable_iam_auth:
+        if _ALLOYDB_IAM_CONNECTOR is None:
+            _ALLOYDB_IAM_CONNECTOR = Connector(refresh_strategy="lazy", enable_iam_auth=True)
+        return _ALLOYDB_IAM_CONNECTOR
+    if _ALLOYDB_PWD_CONNECTOR is None:
+        _ALLOYDB_PWD_CONNECTOR = Connector(refresh_strategy="lazy", enable_iam_auth=False)
+    return _ALLOYDB_PWD_CONNECTOR
 
 
 def _get_alloydb_iam_user() -> str:
     """Resolves the AlloyDB IAM database username from the active service account."""
     explicit_user = os.environ.get("ALLOYDB_IAM_USER")
-    if explicit_user:
-        return explicit_user.strip()
+    if explicit_user and explicit_user.strip():
+        user_val = explicit_user.strip()
+        if user_val.endswith(".gserviceaccount.com"):
+            return user_val[: -len(".gserviceaccount.com")]
+        return user_val
 
     email = ""
     try:
@@ -109,36 +130,63 @@ def _get_alloydb_iam_user() -> str:
 
     if email and email.endswith(".gserviceaccount.com"):
         return email[: -len(".gserviceaccount.com")]
-    if email:
+    if email and "@" in email:
         return email
-    return "537563976049-compute@developer"
+    return ""
 
 
 def _connect_alloydb(
     db_name: str = ALLOYDB_DATABASE,
     project_id: str = PROJECT_ID,
 ):
-    """Creates a pg8000 DB-API connection to AlloyDB via PSC and IAM Database Authentication."""
+    """Creates a pg8000 DB-API connection to AlloyDB via Public IP (mTLS) with IAM + built-in user fallback."""
+    resolved_project = project_id or _resolve_project_id()
     instance_uri = (
-        f"projects/{project_id}/locations/{ALLOYDB_REGION}/"
+        f"projects/{resolved_project}/locations/{ALLOYDB_REGION}/"
         f"clusters/{ALLOYDB_CLUSTER}/instances/{ALLOYDB_INSTANCE}"
     )
+    # PUBLIC works from Cloud Run and Vertex AI Agent Engine without VPC egress or PSC DNS,
+    # while the AlloyDB Connector still enforces mTLS and roles/alloydb.client IAM checks.
+    ip_type_str = os.environ.get("ALLOYDB_IP_TYPE", "PUBLIC").upper()
+    ip_type = getattr(IPTypes, ip_type_str, IPTypes.PUBLIC)
+    auth_mode = os.environ.get("ALLOYDB_AUTH_MODE", "AUTO").strip().upper()
+
+    global _ALLOYDB_IAM_AUTH_FAILED
     iam_user = _get_alloydb_iam_user()
-    connector = _get_alloydb_connector()
-    ip_type_str = os.environ.get("ALLOYDB_IP_TYPE", "PSC").upper()
-    ip_type = getattr(IPTypes, ip_type_str, IPTypes.PSC)
+    if auth_mode == "IAM" or (auth_mode == "AUTO" and iam_user and not _ALLOYDB_IAM_AUTH_FAILED):
+        try:
+            connector = _get_alloydb_connector(enable_iam_auth=True)
+            return connector.connect(
+                instance_uri,
+                "pg8000",
+                user=iam_user,
+                db=db_name,
+                enable_iam_auth=True,
+                ip_type=ip_type,
+            )
+        except Exception as iam_err:
+            if auth_mode == "IAM":
+                raise
+            _ALLOYDB_IAM_AUTH_FAILED = True
+            logger.info(
+                f"AlloyDB IAM auth as '{iam_user}' did not succeed ({iam_err}); "
+                f"falling back to built-in AlloyDB user '{ALLOYDB_USER}'."
+            )
+
+    connector = _get_alloydb_connector(enable_iam_auth=False)
     return connector.connect(
         instance_uri,
         "pg8000",
-        user=iam_user,
+        user=ALLOYDB_USER,
+        password=ALLOYDB_PASSWORD,
         db=db_name,
-        enable_iam_auth=True,
+        enable_iam_auth=False,
         ip_type=ip_type,
     )
 
 
 def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
-    """Verifies or creates AlloyDB database 'apex' and table 'customer_ratings' with identical schema."""
+    """Verifies or creates AlloyDB database and table 'customer_ratings' with expected schema."""
     global _ALLOYDB_TABLE_VERIFIED
     try:
         try:
@@ -175,11 +223,17 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
                 """
             )
             try:
-                cur.execute(f"GRANT ALL PRIVILEGES ON SCHEMA public TO PUBLIC")
+                cur.execute("GRANT ALL PRIVILEGES ON SCHEMA public TO PUBLIC")
                 cur.execute(f"GRANT ALL PRIVILEGES ON TABLE {TABLE_ID} TO PUBLIC")
-            except Exception:
-                pass
+            except Exception as grant_err:
+                logger.info(f"Skipped GRANT on '{TABLE_ID}' (caller is not table owner): {grant_err}")
+            cur.execute("SELECT has_table_privilege(current_user, %s, 'INSERT')", (TABLE_ID,))
+            can_insert = bool(cur.fetchone()[0])
             cur.close()
+            if not can_insert:
+                raise PermissionError(
+                    f"Connected AlloyDB user lacks INSERT privilege on '{TABLE_ID}' in database '{ALLOYDB_DATABASE}'."
+                )
             _ALLOYDB_TABLE_VERIFIED = True
             logger.info(
                 f"AlloyDB table '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}' verified."
@@ -187,7 +241,7 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
         finally:
             conn.close()
     except Exception as e:
-        logger.warning(
+        logger.error(
             f"Could not verify/create AlloyDB table '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}': {e}. "
             "Will retry on rating write."
         )
@@ -195,9 +249,6 @@ def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
 
 # Backward-compatible alias
 ensure_bigquery_ratings_table = ensure_alloydb_ratings_table
-
-# Ensure database and table exist on startup
-ensure_alloydb_ratings_table(PROJECT_ID)
 
 
 def write_customer_rating_to_alloydb(
@@ -208,7 +259,7 @@ def write_customer_rating_to_alloydb(
     timestamp: Optional[str] = None,
     project_id: str = PROJECT_ID,
 ) -> bool:
-    """Inserts a customer evaluation row with timestamp into AlloyDB table customer_ratings in database apex."""
+    """Inserts a customer evaluation row with timestamp into AlloyDB table customer_ratings."""
     global _ALLOYDB_TABLE_VERIFIED
     safe_rating = max(1, min(5, int(rating)))
     if timestamp:
@@ -258,7 +309,7 @@ def write_customer_rating_to_alloydb(
         finally:
             conn.close()
     except Exception as e:
-        logger.warning(
+        logger.exception(
             f"Could not write rating to AlloyDB '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}': {e}. "
             f"Data: {row}"
         )
@@ -765,7 +816,7 @@ root_agent = Agent(
         "Simulated Customer Agent for consumer electronics and home appliances. "
         "Generates novel, live customer personas and issues dynamically on every conversation trigger, "
         "simulates realistic multi-turn human pushback and dialogues, and evaluates experiences "
-        "with authentic feedback persisted to AlloyDB (cluster 'apex', database 'apex', table 'customer_ratings')."
+        "with authentic feedback persisted to AlloyDB (cluster 'apex', database 'postgres', table 'customer_ratings')."
     ),
     model=Gemini(
         model="gemini-3.8-flash",

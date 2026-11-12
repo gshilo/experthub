@@ -11,9 +11,12 @@ locals {
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "bigquery.googleapis.com",
+    "bigqueryconnection.googleapis.com",
+    "alloydb.googleapis.com",
     "cloudbuild.googleapis.com",
     "artifactregistry.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
     "iam.googleapis.com",
     "storage.googleapis.com"
   ]
@@ -50,6 +53,9 @@ locals {
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
     "roles/aiplatform.user",
+    "roles/alloydb.client",
+    "roles/alloydb.databaseUser",
+    "roles/storage.objectAdmin",
     "roles/run.invoker"
   ]
 }
@@ -70,6 +76,9 @@ locals {
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
     "roles/aiplatform.user",
+    "roles/alloydb.client",
+    "roles/alloydb.databaseUser",
+    "roles/storage.objectAdmin",
     "roles/secretmanager.secretAccessor"
   ]
 }
@@ -386,6 +395,30 @@ resource "google_cloud_run_v2_service" "frontend" {
       env {
         name  = "GITHUB_SECRET_NAME"
         value = var.secret_name
+      }
+      env {
+        name  = "OKF_BUCKET_NAME"
+        value = var.okf_bucket_name != "" ? var.okf_bucket_name : "instructions-${var.project_id}"
+      }
+      env {
+        name  = "ALLOYDB_REGION"
+        value = var.alloydb_region != "" ? var.alloydb_region : var.region
+      }
+      env {
+        name  = "ALLOYDB_CLUSTER"
+        value = var.alloydb_cluster
+      }
+      env {
+        name  = "ALLOYDB_INSTANCE"
+        value = var.alloydb_instance
+      }
+      env {
+        name  = "ALLOYDB_DATABASE"
+        value = var.alloydb_database
+      }
+      env {
+        name  = "ALLOYDB_IP_TYPE"
+        value = var.alloydb_ip_type
       }
       env {
         name  = "CUSTOMER_SERVICE_AGENT_ID"
