@@ -189,6 +189,90 @@ def execute_bigquery_query(query: str, project_id: str = PROJECT_ID) -> Dict[str
         }
 
 
+def _synthesize_customer_feedback_policies_fallback(
+    client: bigquery.Client,
+    project_id: str,
+    issues: List[str],
+    feedback_summary: str,
+    max_retries: int = 2,
+) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+    """Defensive fallback to synthesize candidate_policies when Stage 1 AI.GENERATE omits them."""
+    source_text = (
+        "\n".join(f"- {issue}" for issue in issues)
+        if issues
+        else (feedback_summary or "")
+    ).strip()
+    if not source_text or source_text == "No friction or customer complaints found in feedback records.":
+        return [], None
+
+    fallback_sql = f"""
+        WITH ComplaintContext AS (
+          SELECT {json.dumps(source_text)} AS context_text
+        ),
+        GeneratedPolicies AS (
+          SELECT
+            AI.GENERATE(
+              CONCAT(
+                "You are the Lead Quality Auditor. Convert each customer complaint or operational issue below into a concrete, actionable operational policy rule for the customer service agent:\\n\\n",
+                c.context_text, "\\n\\n",
+                "Return 3-5 clear, direct operational rules in 'candidate_policies'. The 'candidate_policies' array MUST NOT be empty."
+              ),
+              connection_id => "us.gemini",
+              endpoint => "gemini-3.8-flash",
+              output_schema => "candidate_policies ARRAY<STRING>"
+            ) AS res
+          FROM ComplaintContext c
+        )
+        SELECT
+          res.candidate_policies AS candidate_policies,
+          res.status AS ai_status
+        FROM GeneratedPolicies
+    """
+    t0 = time.time()
+    for attempt in range(max_retries):
+        try:
+            results = list(client.query(fallback_sql, location=BQ_LOCATION).result())
+            duration_ms = max(1, int((time.time() - t0) * 1000))
+            if results:
+                row = results[0]
+                ai_status = row.get("ai_status") or ""
+                if ai_status:
+                    logger.warning(f"Stage 1 fallback AI.GENERATE status: {ai_status}")
+                policies = [p.strip() for p in (row.get("candidate_policies") or []) if isinstance(p, str) and p.strip()]
+                if policies:
+                    logger.info(f"Stage 1 secondary BigQuery AI.GENERATE fallback synthesized {len(policies)} customer feedback policies.")
+                    q_record = {
+                        "id": "stage_1b_feedback_policy_synthesis",
+                        "stage": "Stage 1b: Customer Feedback Policy Synthesis",
+                        "stage_key": "feedback",
+                        "title": "Customer Feedback Policy Rule Synthesis via AI.GENERATE",
+                        "description": "Synthesizes concrete operational policy rules from detected demo.customer_ratings complaints in BigQuery.",
+                        "sql": fallback_sql.strip(),
+                        "status": "SUCCESS",
+                        "duration_ms": duration_ms,
+                        "tables_referenced": [f"{project_id}.demo.customer_ratings"],
+                        "ai_functions": ["AI.GENERATE"],
+                    }
+                    return policies, q_record
+            break
+        except Exception as e:
+            logger.warning(
+                f"Stage 1 fallback policy synthesis attempt {attempt + 1}/{max_retries} failed: {e}"
+            )
+            if attempt + 1 < max_retries:
+                time.sleep(2 ** attempt)
+
+    # Final deterministic safeguard if secondary AI.GENERATE also returned empty/failed
+    if issues:
+        logger.warning("Stage 1 secondary AI.GENERATE returned no policies; deriving direct operational rules from detected customer issues.")
+        return [
+            f"Proactively resolve and prevent this customer-reported issue without rigid gatekeeping: {issue.strip()}"
+            for issue in issues[:5]
+            if isinstance(issue, str) and issue.strip()
+        ], None
+    return [], None
+
+
 def query_customer_feedback_analysis_bq(
     project_id: str = PROJECT_ID,
     max_retries: int = 3,
@@ -203,7 +287,14 @@ def query_customer_feedback_analysis_bq(
     logger.info("Executing customer feedback AI pushdown query in BigQuery (AI.IF + AI.GENERATE)...")
     client = bigquery.Client(project=project_id)
     sql = f"""
-        WITH FilteredFeedback AS (
+        WITH AllRatingsStats AS (
+          SELECT
+            ROUND(AVG(rating), 2) AS overall_avg_rating,
+            COUNTIF(rating <= 3) AS low_ratings_count,
+            COUNT(*) AS total_ratings
+          FROM `{project_id}.demo.customer_ratings`
+        ),
+        FilteredFeedback AS (
           SELECT
             customer_name,
             rating,
@@ -218,35 +309,51 @@ def query_customer_feedback_analysis_bq(
         ),
         FeedbackStats AS (
           SELECT
-            ROUND(AVG(rating), 2) AS avg_rating,
-            COUNTIF(rating <= 3) AS low_ratings_count,
-            COUNT(*) AS total_ratings,
+            a.overall_avg_rating AS avg_rating,
+            a.low_ratings_count,
+            a.total_ratings,
             COALESCE(
-              STRING_AGG(
-                CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
-                "\\n" ORDER BY rating ASC, timestamp DESC
-                LIMIT 8
+              (
+                SELECT STRING_AGG(
+                  CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
+                  "\\n" ORDER BY rating ASC, timestamp DESC
+                  LIMIT 8
+                )
+                FROM FilteredFeedback
               ),
               "No friction or customer complaints found in feedback records."
             ) AS feedback_summary
-          FROM FilteredFeedback
+          FROM AllRatingsStats a
+        ),
+        GeneratedAnalysis AS (
+          SELECT
+            f.avg_rating,
+            f.low_ratings_count,
+            f.total_ratings,
+            f.feedback_summary,
+            AI.GENERATE(
+              CONCAT(
+                "You are the Lead Quality Auditor. Analyze the following explicit customer complaints and low-rated reviews from customer_ratings:\\n\\n",
+                f.feedback_summary, "\\n\\n",
+                "Produce BOTH required JSON arrays (both arrays MUST be non-empty whenever customer complaints are present):\\n",
+                "1. 'issues': 3-5 specific operational problems, policy disputes, or customer friction points reported in these reviews.\\n",
+                "2. 'candidate_policies': 3-5 concrete, actionable operational policy rules for the customer service agent directly addressing each customer complaint."
+              ),
+              connection_id => "us.gemini",
+              endpoint => "gemini-3.8-flash",
+              output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
+            ) AS res
+          FROM FeedbackStats f
         )
         SELECT
-          COALESCE(f.avg_rating, 5.0) AS avg_rating,
-          COALESCE(f.low_ratings_count, 0) AS low_ratings_count,
-          COALESCE(f.total_ratings, 0) AS total_ratings,
-          res.issues,
-          res.candidate_policies
-        FROM FeedbackStats f,
-        UNNEST([AI.GENERATE(
-          CONCAT(
-            "Analyze these customer service complaints:\\n", f.feedback_summary, "\\n\\n",
-            "Generate JSON with: issues (list of operational problems) and candidate_policies (list of rules to fix each problem)."
-          ),
-          connection_id => "us.gemini",
-          endpoint => "gemini-3.8-flash",
-          output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
-        )]) AS res
+          COALESCE(avg_rating, 5.0) AS avg_rating,
+          COALESCE(low_ratings_count, 0) AS low_ratings_count,
+          COALESCE(total_ratings, 0) AS total_ratings,
+          feedback_summary,
+          res.issues AS issues,
+          res.candidate_policies AS candidate_policies,
+          res.status AS ai_status
+        FROM GeneratedAnalysis
     """
     last_err = None
     t0 = time.time()
@@ -257,8 +364,31 @@ def query_customer_feedback_analysis_bq(
             duration_ms = max(1, int((time.time() - t0) * 1000))
             if results:
                 row = results[0]
-                issues = list(row.get("issues") or [])
-                candidate_policies = list(row.get("candidate_policies") or [])
+                ai_status = row.get("ai_status") or ""
+                if ai_status:
+                    logger.warning(f"Stage 1 BigQuery AI.GENERATE returned status warning: {ai_status}")
+                avg_rating = float(row.get("avg_rating") or 3.8)
+                low_ratings_count = int(row.get("low_ratings_count") or 0)
+                total_ratings = int(row.get("total_ratings") or 0)
+                feedback_summary = str(row.get("feedback_summary") or "")
+                issues = [i.strip() for i in (row.get("issues") or []) if isinstance(i, str) and i.strip()]
+                candidate_policies = [p.strip() for p in (row.get("candidate_policies") or []) if isinstance(p, str) and p.strip()]
+                extra_queries: List[Dict[str, Any]] = []
+
+                if (issues or low_ratings_count > 0) and not candidate_policies:
+                    logger.warning(
+                        f"Stage 1 AI.GENERATE returned {len(issues)} issue(s) and {low_ratings_count} low rating(s) "
+                        "but 0 candidate_policies; triggering secondary customer feedback policy synthesis."
+                    )
+                    candidate_policies, fallback_q = _synthesize_customer_feedback_policies_fallback(
+                        client=client,
+                        project_id=project_id,
+                        issues=issues,
+                        feedback_summary=feedback_summary,
+                    )
+                    if fallback_q:
+                        extra_queries.append(fallback_q)
+
                 q_record = {
                     "id": "stage_1_feedback",
                     "stage": "Stage 1: Customer Feedback Analysis",
@@ -272,12 +402,12 @@ def query_customer_feedback_analysis_bq(
                     "ai_functions": ["AI.IF", "AI.GENERATE"],
                 }
                 return {
-                    "average_rating": float(row.get("avg_rating") or 3.8),
-                    "low_ratings_count": int(row.get("low_ratings_count") or 0),
-                    "total_rated_sessions": int(row.get("total_ratings") or 0),
+                    "average_rating": avg_rating,
+                    "low_ratings_count": low_ratings_count,
+                    "total_rated_sessions": total_ratings,
                     "detected_issues": issues,
                     "candidate_policies": candidate_policies,
-                    "executed_queries": [q_record],
+                    "executed_queries": [q_record] + extra_queries,
                 }
             break
         except Exception as e:
@@ -590,35 +720,45 @@ def _query_telemetry_token_efficiency_bq(
             APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_latency_ms,
             STRING_AGG(SUBSTR(TO_JSON_STRING(response), 1, 150), "\\n" LIMIT 5) AS sample_responses
           FROM `{project_id}.agent_telemetry.v_llm_response`
+        ),
+        GeneratedTokenOpt AS (
+          SELECT
+            t.total_calls,
+            t.avg_prompt_tokens,
+            t.avg_completion_tokens,
+            t.avg_latency_ms,
+            t.p95_latency_ms,
+            AI.GENERATE(
+              CONCAT(
+                "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
+                "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
+                "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
+                "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
+                "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
+                "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
+                "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
+                "Produce ALL THREE required JSON fields (both arrays MUST be non-empty):\\n",
+                "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
+                "2. 'token_directives': 2-4 direct, concrete operational token-efficiency directives for the agent system prompt.\\n",
+                "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
+              ),
+              connection_id => "us.gemini",
+              endpoint => "gemini-3.8-flash",
+              output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
+            ) AS res
+          FROM TelemetrySummary t
         )
         SELECT
-          t.total_calls,
-          t.avg_prompt_tokens,
-          t.avg_completion_tokens,
-          t.avg_latency_ms,
-          t.p95_latency_ms,
-          res.token_recommendations,
-          res.token_directives,
-          res.estimated_savings_percent
-        FROM TelemetrySummary t,
-        UNNEST([AI.GENERATE(
-          CONCAT(
-            "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
-            "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
-            "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
-            "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
-            "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
-            "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
-            "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
-            "Produce:\\n",
-            "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
-            "2. 'token_directives': 2-4 direct operational token directives for the agent system prompt.\\n",
-            "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
-          ),
-          connection_id => "us.gemini",
-          endpoint => "gemini-3.8-flash",
-          output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
-        )]) AS res
+          total_calls,
+          avg_prompt_tokens,
+          avg_completion_tokens,
+          avg_latency_ms,
+          p95_latency_ms,
+          res.token_recommendations AS token_recommendations,
+          res.token_directives AS token_directives,
+          res.estimated_savings_percent AS estimated_savings_percent,
+          res.status AS ai_status
+        FROM GeneratedTokenOpt
     """
     last_err = None
     start_time = time.time()
@@ -640,8 +780,16 @@ def _query_telemetry_token_efficiency_bq(
             }
             if results:
                 row = results[0]
-                recs = list(row.get("token_recommendations") or [])
-                directives = list(row.get("token_directives") or [])
+                ai_status = row.get("ai_status") or ""
+                if ai_status:
+                    logger.warning(f"Stage 2c BigQuery AI.GENERATE returned status warning: {ai_status}")
+                recs = [r.strip() for r in (row.get("token_recommendations") or []) if isinstance(r, str) and r.strip()]
+                directives = [d.strip() for d in (row.get("token_directives") or []) if isinstance(d, str) and d.strip()]
+                if recs and not directives:
+                    logger.warning(
+                        f"Stage 2c AI.GENERATE returned {len(recs)} token_recommendations but 0 token_directives; deriving directives from recommendations."
+                    )
+                    directives = list(recs[:4])
                 savings = str(row.get("estimated_savings_percent") or "35%")
                 return {
                     "total_calls": int(row.get("total_calls") or 0),
@@ -899,25 +1047,26 @@ def generate_initial_okf_rules(analysis: Dict[str, Any], token_opt: Dict[str, An
     issues_bullets = "\n".join(f"- {issue}" for issue in all_issues) if all_issues else "- Continuous operational telemetry and feedback monitored."
 
     # Assemble dynamic policies purely from BigQuery AI pushdown findings
+    # Prioritize Stage 1 Customer Feedback policies ahead of Stage 2 Agent Metrics policies
     policy_rules: List[str] = []
     for p in analysis.get("candidate_policies", []):
         formatted_p = format_rule_with_basis(p, "Customer Feedback")
-        if formatted_p not in policy_rules:
+        if formatted_p not in policy_rules and not rule_already_present(formatted_p, [(0, x) for x in policy_rules]):
             policy_rules.append(formatted_p)
 
     for p in token_opt.get("candidate_policies", []):
         formatted_p = format_rule_with_basis(p, "Agent Metrics")
-        if formatted_p not in policy_rules:
+        if formatted_p not in policy_rules and not rule_already_present(formatted_p, [(0, x) for x in policy_rules]):
             policy_rules.append(formatted_p)
 
     for p in token_opt.get("quality_policies", []):
         formatted_p = format_rule_with_basis(p, "Agent Metrics")
-        if formatted_p not in policy_rules:
+        if formatted_p not in policy_rules and not rule_already_present(formatted_p, [(0, x) for x in policy_rules]):
             policy_rules.append(formatted_p)
 
     for p in token_opt.get("error_guardrails", []):
         formatted_p = format_rule_with_basis(p, "Agent Metrics")
-        if formatted_p not in policy_rules:
+        if formatted_p not in policy_rules and not rule_already_present(formatted_p, [(0, x) for x in policy_rules]):
             policy_rules.append(formatted_p)
 
     if not policy_rules:
@@ -1064,8 +1213,21 @@ LEGACY_HARDCODED_PATTERNS = [
 ]
 
 
+def is_customer_feedback_rule(text: str) -> bool:
+    """Returns True if the rule is explicitly tagged as originating from Customer Feedback."""
+    return bool(
+        re.search(
+            r"\[(based on|source|basis):\s*customer feedback\]",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def is_legacy_hardcoded_rule(text: str) -> bool:
     """Checks whether text matches any of the legacy hardcoded rule templates."""
+    if is_customer_feedback_rule(text):
+        return False
     clean = normalize_rule_text(text).lower()
     for pat in LEGACY_HARDCODED_PATTERNS:
         if re.search(pat, clean, flags=re.IGNORECASE):
@@ -1074,7 +1236,10 @@ def is_legacy_hardcoded_rule(text: str) -> bool:
 
 
 def purge_legacy_hardcoded_rules(content: str) -> str:
-    """Purges known legacy hardcoded templates from an existing OKF markdown document and re-numbers policies."""
+    """Purges known legacy hardcoded templates from an existing OKF markdown document and re-numbers policies.
+
+    Rules explicitly tagged `[Based on: Customer Feedback]` are always preserved.
+    """
     lines = content.splitlines()
     cleaned_lines: List[str] = []
     current_sec = None
@@ -1097,7 +1262,7 @@ def purge_legacy_hardcoded_rules(content: str) -> str:
             m = re.match(r"^\s*(\d+)[\.\)]\s*(.+)$", line)
             if m:
                 p_text = m.group(2).strip()
-                if is_legacy_hardcoded_rule(p_text):
+                if not is_customer_feedback_rule(p_text) and is_legacy_hardcoded_rule(p_text):
                     logger.info(f"Purging legacy hardcoded policy rule: {p_text}")
                     continue
                 cleaned_lines.append(f"{policy_counter}. {p_text}")
@@ -1105,7 +1270,7 @@ def purge_legacy_hardcoded_rules(content: str) -> str:
                 continue
             elif line_s.startswith("- ") or line_s.startswith("* "):
                 p_text = line_s[2:].strip()
-                if is_legacy_hardcoded_rule(p_text):
+                if not is_customer_feedback_rule(p_text) and is_legacy_hardcoded_rule(p_text):
                     logger.info(f"Purging legacy hardcoded policy bullet: {p_text}")
                     continue
                 cleaned_lines.append(f"{policy_counter}. {p_text}")
@@ -1114,7 +1279,7 @@ def purge_legacy_hardcoded_rules(content: str) -> str:
         elif current_sec == "token":
             if line_s.startswith("- ") or line_s.startswith("* "):
                 d_text = line_s[2:].strip()
-                if is_legacy_hardcoded_rule(d_text):
+                if not is_customer_feedback_rule(d_text) and is_legacy_hardcoded_rule(d_text):
                     logger.info(f"Purging legacy hardcoded token directive: {d_text}")
                     continue
                 cleaned_lines.append(f"- {d_text}")
@@ -1194,10 +1359,27 @@ def merge_and_append_new_rules(
     existing_policies, existing_directives = parse_policies_and_directives(cleaned_existing)
     candidate_policies, candidate_directives = get_candidate_new_rules(analysis, token_opt)
 
+    existing_cf_policies = [
+        (num, ex) for num, ex in existing_policies if is_customer_feedback_rule(ex)
+    ]
+
+    # Prioritize Customer Feedback candidates ahead of Agent Metrics candidates.
+    # Customer Feedback rules only deduplicate against existing/queued Customer Feedback rules
+    # so they are never silently dropped because an Agent Metrics rule covers a similar topic.
+    cf_candidates = [p for p in candidate_policies if is_customer_feedback_rule(p)]
+    am_candidates = [p for p in candidate_policies if not is_customer_feedback_rule(p)]
+
     new_policies_to_add: List[str] = []
-    for p in candidate_policies:
-        if not rule_already_present(p, existing_policies) and not rule_already_present(p, [(0, x) for x in new_policies_to_add]):
-            new_policies_to_add.append(format_rule_with_basis(p))
+    for p in cf_candidates:
+        formatted_p = format_rule_with_basis(p, "Customer Feedback")
+        queued_cf = [(0, x) for x in new_policies_to_add if is_customer_feedback_rule(x)]
+        if not rule_already_present(formatted_p, existing_cf_policies) and not rule_already_present(formatted_p, queued_cf):
+            new_policies_to_add.append(formatted_p)
+
+    for p in am_candidates:
+        formatted_p = format_rule_with_basis(p, "Agent Metrics")
+        if not rule_already_present(formatted_p, existing_policies) and not rule_already_present(formatted_p, [(0, x) for x in new_policies_to_add]):
+            new_policies_to_add.append(formatted_p)
 
     new_directives_to_add: List[str] = []
     for d in candidate_directives:
@@ -1236,17 +1418,29 @@ def merge_and_append_new_rules(
             if line_s.startswith("- ") or line_s.startswith("* "):
                 token_last_idx = idx + 1
 
-    next_policy_num = len(existing_policies) + 1
-    new_policy_lines: List[str] = []
-    for p in new_policies_to_add:
-        formatted_p = format_rule_with_basis(p)
-        new_policy_lines.append(f"{next_policy_num}. {formatted_p}")
-        next_policy_num += 1
+    # Combine all existing + newly added policies, ordering [Based on: Customer Feedback]
+    # rules FIRST so customer-reported issues are never buried below Agent Metrics rules.
+    upgraded_existing_policies: List[str] = []
+    for _, ex_text in existing_policies:
+        if not re.search(r"\[(based on|source|basis):\s*(customer feedback|agent metrics)\]", ex_text, flags=re.IGNORECASE):
+            upgraded_existing_policies.append(format_rule_with_basis(ex_text))
+        else:
+            upgraded_existing_policies.append(ex_text)
+
+    combined_policies = upgraded_existing_policies + [format_rule_with_basis(p) for p in new_policies_to_add]
+    ordered_policies = (
+        [p for p in combined_policies if is_customer_feedback_rule(p)]
+        + [p for p in combined_policies if not is_customer_feedback_rule(p)]
+    )
+    rendered_policy_lines: List[str] = [
+        f"{idx + 1}. {rule}" for idx, rule in enumerate(ordered_policies)
+    ]
 
     new_directive_lines: List[str] = [f"- {format_rule_with_basis(d)}" for d in new_directives_to_add]
 
     output_lines: List[str] = []
     current_sec = None
+    policies_emitted = False
     for idx, line in enumerate(lines):
         line_s = line.strip()
         if line_s.startswith("verified:"):
@@ -1256,6 +1450,8 @@ def merge_and_append_new_rules(
         if line_s.startswith("# Policy"):
             current_sec = "policy"
             output_lines.append(line)
+            output_lines.extend(rendered_policy_lines)
+            policies_emitted = True
             continue
         elif line_s.startswith("# Token Optimization Directive"):
             current_sec = "token"
@@ -1264,13 +1460,11 @@ def merge_and_append_new_rules(
         elif line_s.startswith("# ") and current_sec:
             current_sec = None
 
-        # Upgrade existing lines if missing basis indication
+        # Skip old policy lines since we already emitted the cleanly ordered # Policy section
         if current_sec == "policy":
-            m = re.match(r"^(\s*\d+[\.\)]\s*)(.+)$", line)
-            if m:
-                p_text = m.group(2)
-                if not re.search(r"\[(based on|source|basis):\s*(customer feedback|agent metrics)\]", p_text, flags=re.IGNORECASE):
-                    line = f"{m.group(1)}{format_rule_with_basis(p_text)}"
+            m = re.match(r"^\s*(\d+)[\.\)]\s*(.+)$", line)
+            if m or line_s.startswith("- ") or line_s.startswith("* "):
+                continue
         elif current_sec == "token":
             m = re.match(r"^(\s*[-\*]\s*)(.+)$", line)
             if m:
@@ -1279,15 +1473,13 @@ def merge_and_append_new_rules(
                     line = f"{m.group(1)}{format_rule_with_basis(d_text)}"
 
         output_lines.append(line)
-        if idx == policy_last_idx - 1 and new_policy_lines:
-            output_lines.extend(new_policy_lines)
         if idx == token_last_idx - 1 and new_directive_lines:
             output_lines.extend(new_directive_lines)
 
     # If sections were completely missing from the existing document, append them
-    if policy_last_idx == -1 and new_policy_lines:
+    if not policies_emitted and rendered_policy_lines:
         output_lines.append("\n# Policy")
-        output_lines.extend(new_policy_lines)
+        output_lines.extend(rendered_policy_lines)
     if token_last_idx == -1 and new_directive_lines:
         output_lines.append("\n# Token Optimization Directive")
         output_lines.extend(new_directive_lines)
@@ -1709,7 +1901,11 @@ def run_audit_pipeline() -> Dict[str, Any]:
         "repo": REPO_NAME,
         "workflow_state": "AWAITING_HUMAN_REVIEW",
         "okf_file": OKF_FILENAME,
-        # Detailed telemetry findings
+        # Detailed customer feedback & telemetry findings
+        "total_rated_sessions": analysis.get("total_rated_sessions", 0),
+        "low_ratings_count": analysis.get("low_ratings_count", 0),
+        "customer_feedback_issues": list(analysis.get("detected_issues", [])),
+        "customer_feedback_policies": analysis.get("candidate_policies", []),
         "telemetry_issues": token_opt.get("telemetry_issues", []),
         "runtime_errors_count": token_opt.get("total_errors", 0),
         "suboptimal_issues": token_opt.get("suboptimal_issues", []),
@@ -1733,7 +1929,14 @@ def get_default_audit_queries(project_id: str = PROJECT_ID) -> List[Dict[str, An
             "stage_key": "feedback",
             "title": "Customer Feedback Friction & Policy AI Pushdown",
             "description": "Filters customer ratings for friction with AI.IF and synthesizes operational issues and candidate policies with AI.GENERATE in BigQuery.",
-            "sql": f"""WITH FilteredFeedback AS (
+            "sql": f"""WITH AllRatingsStats AS (
+  SELECT
+    ROUND(AVG(rating), 2) AS overall_avg_rating,
+    COUNTIF(rating <= 3) AS low_ratings_count,
+    COUNT(*) AS total_ratings
+  FROM `{project_id}.demo.customer_ratings`
+),
+FilteredFeedback AS (
   SELECT
     customer_name,
     rating,
@@ -1748,35 +1951,51 @@ def get_default_audit_queries(project_id: str = PROJECT_ID) -> List[Dict[str, An
 ),
 FeedbackStats AS (
   SELECT
-    ROUND(AVG(rating), 2) AS avg_rating,
-    COUNTIF(rating <= 3) AS low_ratings_count,
-    COUNT(*) AS total_ratings,
+    a.overall_avg_rating AS avg_rating,
+    a.low_ratings_count,
+    a.total_ratings,
     COALESCE(
-      STRING_AGG(
-        CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
-        "\\n" ORDER BY rating ASC, timestamp DESC
-        LIMIT 8
+      (
+        SELECT STRING_AGG(
+          CONCAT("Customer ", customer_name, " (Rating: ", CAST(rating AS STRING), "/5): ", description),
+          "\\n" ORDER BY rating ASC, timestamp DESC
+          LIMIT 8
+        )
+        FROM FilteredFeedback
       ),
       "No friction or customer complaints found in feedback records."
     ) AS feedback_summary
-  FROM FilteredFeedback
+  FROM AllRatingsStats a
+),
+GeneratedAnalysis AS (
+  SELECT
+    f.avg_rating,
+    f.low_ratings_count,
+    f.total_ratings,
+    f.feedback_summary,
+    AI.GENERATE(
+      CONCAT(
+        "You are the Lead Quality Auditor. Analyze the following explicit customer complaints and low-rated reviews from customer_ratings:\\n\\n",
+        f.feedback_summary, "\\n\\n",
+        "Produce BOTH required JSON arrays (both arrays MUST be non-empty whenever customer complaints are present):\\n",
+        "1. 'issues': 3-5 specific operational problems, policy disputes, or customer friction points reported in these reviews.\\n",
+        "2. 'candidate_policies': 3-5 concrete, actionable operational policy rules for the customer service agent directly addressing each customer complaint."
+      ),
+      connection_id => "us.gemini",
+      endpoint => "gemini-3.8-flash",
+      output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
+    ) AS res
+  FROM FeedbackStats f
 )
 SELECT
-  COALESCE(f.avg_rating, 5.0) AS avg_rating,
-  COALESCE(f.low_ratings_count, 0) AS low_ratings_count,
-  COALESCE(f.total_ratings, 0) AS total_ratings,
-  res.issues,
-  res.candidate_policies
-FROM FeedbackStats f,
-UNNEST([AI.GENERATE(
-  CONCAT(
-    "Analyze these customer service complaints:\\n", f.feedback_summary, "\\n\\n",
-    "Generate JSON with: issues (list of operational problems) and candidate_policies (list of rules to fix each problem)."
-  ),
-  connection_id => "us.gemini",
-  endpoint => "gemini-3.8-flash",
-  output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
-)]) AS res""".strip(),
+  COALESCE(avg_rating, 5.0) AS avg_rating,
+  COALESCE(low_ratings_count, 0) AS low_ratings_count,
+  COALESCE(total_ratings, 0) AS total_ratings,
+  feedback_summary,
+  res.issues AS issues,
+  res.candidate_policies AS candidate_policies,
+  res.status AS ai_status
+FROM GeneratedAnalysis""".strip(),
             "status": "SUCCESS",
             "duration_ms": 1150,
             "tables_referenced": [f"{project_id}.demo.customer_ratings"],
@@ -1910,35 +2129,45 @@ UNNEST([AI.GENERATE(
     APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_latency_ms,
     STRING_AGG(SUBSTR(TO_JSON_STRING(response), 1, 150), "\\n" LIMIT 5) AS sample_responses
   FROM `{project_id}.agent_telemetry.v_llm_response`
+),
+GeneratedTokenOpt AS (
+  SELECT
+    t.total_calls,
+    t.avg_prompt_tokens,
+    t.avg_completion_tokens,
+    t.avg_latency_ms,
+    t.p95_latency_ms,
+    AI.GENERATE(
+      CONCAT(
+        "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
+        "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
+        "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
+        "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
+        "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
+        "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
+        "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
+        "Produce ALL THREE required JSON fields (both arrays MUST be non-empty):\\n",
+        "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
+        "2. 'token_directives': 2-4 direct, concrete operational token-efficiency directives for the agent system prompt.\\n",
+        "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
+      ),
+      connection_id => "us.gemini",
+      endpoint => "gemini-3.8-flash",
+      output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
+    ) AS res
+  FROM TelemetrySummary t
 )
 SELECT
-  t.total_calls,
-  t.avg_prompt_tokens,
-  t.avg_completion_tokens,
-  t.avg_latency_ms,
-  t.p95_latency_ms,
-  res.token_recommendations,
-  res.token_directives,
-  res.estimated_savings_percent
-FROM TelemetrySummary t,
-UNNEST([AI.GENERATE(
-  CONCAT(
-    "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
-    "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
-    "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
-    "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
-    "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
-    "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
-    "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
-    "Produce:\\n",
-    "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
-    "2. 'token_directives': 2-4 direct operational token directives for the agent system prompt.\\n",
-    "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
-  ),
-  connection_id => "us.gemini",
-  endpoint => "gemini-3.8-flash",
-  output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
-)]) AS res""".strip(),
+  total_calls,
+  avg_prompt_tokens,
+  avg_completion_tokens,
+  avg_latency_ms,
+  p95_latency_ms,
+  res.token_recommendations AS token_recommendations,
+  res.token_directives AS token_directives,
+  res.estimated_savings_percent AS estimated_savings_percent,
+  res.status AS ai_status
+FROM GeneratedTokenOpt""".strip(),
             "status": "SUCCESS",
             "duration_ms": 1210,
             "tables_referenced": [f"{project_id}.agent_telemetry.v_llm_response"],
@@ -2483,7 +2712,7 @@ CRITICAL DESIGN REQUIREMENTS FOR YOUR SQL QUERY:
    - When the question asks about **agent decisions, decision quality, conversation quality, user intents, tool usage, policy adherence, troubleshooting accuracy, or what the agent can do better**:
      * Query `{project_id}.agent_telemetry.agent_events` (filtering `event_type IN ('USER_MESSAGE_RECEIVED', 'TOOL_STARTING', 'TOOL_COMPLETED', 'AGENT_RESPONSE')`) or join `v_tool_starting`, `v_tool_completed`, and `v_agent_response` by `session_id` / `invocation_id` to reconstruct multi-turn session decision traces (`CUSTOMER_INTENT` -> `TOOL_CALLED` -> `TOOL_OUTPUT` -> `AGENT_DECISION`).
      * Aggregate a concise corpus of reconstructed session traces (`LIMIT 8` sessions, with `SUBSTR(session_trace, 1, 1100)`) so `AI.GENERATE` can inspect the actual conversations, customer intents, tool arguments, tool outputs, and agent decisions quickly.
-   - Include `{project_id}.demo.customer_ratings` ONLY if the question asks about customer ratings, CSAT, customer satisfaction, reviews, or overall customer experience.
+   - **Always correlate with `{project_id}.demo.customer_ratings`** whenever the question evaluates agent quality, decision quality, customer satisfaction, ratings, CSAT, reviews, complaints, or asks what can be done better / how to improve (include a `CustomerRatingsContext` CTE aggregating total ratings, avg rating, low ratings count, and recent verbal reviews from `{project_id}.demo.customer_ratings`). Only omit `demo.customer_ratings` if the user asks purely about low-level runtime infrastructure metrics (e.g., raw token counts, latency percentiles, or tool stack traces).
    - Include `{project_id}.agent_telemetry.v_llm_response` or `v_tool_error` / `v_llm_error` ONLY if the question asks about latency, response speed, token usage, cost, or technical/runtime errors. Do NOT clutter decision-quality or intent queries with unrequested token/latency KPIs.
    - **Performance Rule**: Do NOT run row-level `AI.IF`, `AI.CLASSIFY`, or `AI.SCORE` on unaggregated rows inside CTEs before `AI.GENERATE` (doing multiple AI calls per row causes query timeouts). Instead, do standard SQL filtering/aggregation in CTEs and perform a SINGLE `AI.GENERATE` call on the aggregated single-row corpus in the final `SELECT`.
 
@@ -2558,13 +2787,6 @@ def _build_adaptive_conversational_fallback_sql(
         if turns:
             history_snippet = " | ".join(turns).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
 
-    wants_ratings = any(
-        w in q_lower
-        for w in [
-            "rating", "ratings", "csat", "satisfaction", "sentiment", "review", "reviews",
-            "star", "stars", "feedback", "customer experience", "praise", "complaint"
-        ]
-    )
     wants_perf_kpis = any(
         w in q_lower
         for w in [
@@ -2572,6 +2794,17 @@ def _build_adaptive_conversational_fallback_sql(
             "error", "errors", "exception", "crash", "performance", "kpi"
         ]
     )
+    # Include demo.customer_ratings by default for evaluative, quality, improvement, or customer-facing questions;
+    # only skip it when the user asks exclusively about low-level performance/token/error infrastructure.
+    is_pure_infra_query = wants_perf_kpis and not any(
+        w in q_lower
+        for w in [
+            "rating", "ratings", "csat", "satisfaction", "sentiment", "review", "reviews",
+            "star", "stars", "feedback", "customer", "praise", "complaint", "quality",
+            "decision", "decisions", "better", "improve", "suggest", "recommend"
+        ]
+    )
+    wants_ratings = not is_pure_infra_query
 
     tables_referenced = [
         f"{project_id}.agent_telemetry.agent_events",

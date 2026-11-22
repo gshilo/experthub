@@ -152,17 +152,6 @@ def main():
 
     agent_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Synchronize plugins.yaml with target project
-    plugins_yaml_path = os.path.join(agent_dir, "plugins.yaml")
-    if os.path.exists(plugins_yaml_path) and not args.dry_run:
-        with open(plugins_yaml_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        import re
-        updated = re.sub(r"^(\s*project_id:\s*).*$", f"\\g<1>{args.project}", content, flags=re.MULTILINE)
-        if updated != content:
-            with open(plugins_yaml_path, "w", encoding="utf-8") as f:
-                f.write(updated)
-
     # Check for required ADK binary
     adk_bin = os.path.join(agent_dir, "..", ".venv", "bin", "adk")
     if not os.path.exists(adk_bin):
@@ -198,18 +187,6 @@ def main():
     except FileNotFoundError:
         print(f"Error: ADK CLI '{adk_bin}' not found.", file=sys.stderr)
         return 1
-    finally:
-        if os.path.exists(plugins_yaml_path) and not args.dry_run:
-            try:
-                import re
-                with open(plugins_yaml_path, "r", encoding="utf-8") as f:
-                    cur = f.read()
-                restored = re.sub(r"^(\s*project_id:\s*).*$", r'\g<1>""', cur, flags=re.MULTILINE)
-                if restored != cur:
-                    with open(plugins_yaml_path, "w", encoding="utf-8") as f:
-                        f.write(restored)
-            except Exception:
-                pass
 
 
 if __name__ == "__main__":

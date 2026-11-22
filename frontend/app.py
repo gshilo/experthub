@@ -45,7 +45,11 @@ def _resolve_project_id() -> str:
 
 
 PROJECT_ID = _resolve_project_id()
+GCP_REGION = os.environ.get("GCP_REGION", "us-central1").strip()
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
+CUSTOMER_SERVICE_AGENT_ID = os.environ.get("CUSTOMER_SERVICE_AGENT_ID", "").strip()
+CUSTOMER_AGENT_ID = os.environ.get("CUSTOMER_AGENT_ID", "").strip()
+AUDITOR_AGENT_ID = os.environ.get("AUDITOR_AGENT_ID", "").strip()
 
 
 def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
@@ -392,23 +396,36 @@ FeedbackStats AS (
       "No friction or customer complaints found in feedback records."
     ) AS feedback_summary
   FROM FilteredFeedback
+),
+GeneratedAnalysis AS (
+  SELECT
+    f.avg_rating,
+    f.low_ratings_count,
+    f.total_ratings,
+    f.feedback_summary,
+    AI.GENERATE(
+      CONCAT(
+        "You are the Lead Quality Auditor. Analyze the following explicit customer complaints and low-rated reviews from customer_ratings:\\n\\n",
+        f.feedback_summary, "\\n\\n",
+        "Produce BOTH required JSON arrays (both arrays MUST be non-empty whenever customer complaints are present):\\n",
+        "1. 'issues': 3-5 specific operational problems, policy disputes, or customer friction points reported in these reviews.\\n",
+        "2. 'candidate_policies': 3-5 concrete, actionable operational policy rules for the customer service agent directly addressing each customer complaint."
+      ),
+      connection_id => "us.gemini",
+      endpoint => "gemini-3.8-flash",
+      output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
+    ) AS res
+  FROM FeedbackStats f
 )
 SELECT
-  COALESCE(f.avg_rating, 5.0) AS avg_rating,
-  COALESCE(f.low_ratings_count, 0) AS low_ratings_count,
-  COALESCE(f.total_ratings, 0) AS total_ratings,
-  res.issues,
-  res.candidate_policies
-FROM FeedbackStats f,
-UNNEST([AI.GENERATE(
-  CONCAT(
-    "Analyze these customer service complaints:\\n", f.feedback_summary, "\\n\\n",
-    "Generate JSON with: issues (list of operational problems) and candidate_policies (list of rules to fix each problem)."
-  ),
-  connection_id => "us.gemini",
-  endpoint => "gemini-3.8-flash",
-  output_schema => "issues ARRAY<STRING>, candidate_policies ARRAY<STRING>"
-)]) AS res""".strip(),
+  COALESCE(avg_rating, 5.0) AS avg_rating,
+  COALESCE(low_ratings_count, 0) AS low_ratings_count,
+  COALESCE(total_ratings, 0) AS total_ratings,
+  feedback_summary,
+  res.issues AS issues,
+  res.candidate_policies AS candidate_policies,
+  res.status AS ai_status
+FROM GeneratedAnalysis""".strip(),
                 "status": "SUCCESS",
                 "duration_ms": 1150,
                 "tables_referenced": [f"{project_id}.demo.customer_ratings"],
@@ -542,35 +559,45 @@ UNNEST([AI.GENERATE(
     APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_latency_ms,
     STRING_AGG(SUBSTR(TO_JSON_STRING(response), 1, 150), "\\n" LIMIT 5) AS sample_responses
   FROM `{project_id}.agent_telemetry.v_llm_response`
+),
+GeneratedTokenOpt AS (
+  SELECT
+    t.total_calls,
+    t.avg_prompt_tokens,
+    t.avg_completion_tokens,
+    t.avg_latency_ms,
+    t.p95_latency_ms,
+    AI.GENERATE(
+      CONCAT(
+        "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
+        "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
+        "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
+        "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
+        "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
+        "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
+        "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
+        "Produce ALL THREE required JSON fields (both arrays MUST be non-empty):\\n",
+        "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
+        "2. 'token_directives': 2-4 direct, concrete operational token-efficiency directives for the agent system prompt.\\n",
+        "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
+      ),
+      connection_id => "us.gemini",
+      endpoint => "gemini-3.8-flash",
+      output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
+    ) AS res
+  FROM TelemetrySummary t
 )
 SELECT
-  t.total_calls,
-  t.avg_prompt_tokens,
-  t.avg_completion_tokens,
-  t.avg_latency_ms,
-  t.p95_latency_ms,
-  res.token_recommendations,
-  res.token_directives,
-  res.estimated_savings_percent
-FROM TelemetrySummary t,
-UNNEST([AI.GENERATE(
-  CONCAT(
-    "You are the Lead Quality Auditor. Analyze the following customer service LLM agent execution telemetry metrics:\\n",
-    "- Total calls: ", CAST(t.total_calls AS STRING), "\\n",
-    "- Avg prompt tokens: ", CAST(t.avg_prompt_tokens AS STRING), "\\n",
-    "- Avg completion tokens: ", CAST(t.avg_completion_tokens AS STRING), "\\n",
-    "- Avg latency: ", CAST(t.avg_latency_ms AS STRING), "ms\\n",
-    "- P95 latency: ", CAST(t.p95_latency_ms AS STRING), "ms\\n",
-    "Sample model completions:\\n", COALESCE(t.sample_responses, "None"), "\\n\\n",
-    "Produce:\\n",
-    "1. 'token_recommendations': 2-4 actionable prompt compression and latency reduction recommendations.\\n",
-    "2. 'token_directives': 2-4 direct operational token directives for the agent system prompt.\\n",
-    "3. 'estimated_savings_percent': estimated percentage token savings (e.g., '35%')."
-  ),
-  connection_id => "us.gemini",
-  endpoint => "gemini-3.8-flash",
-  output_schema => "token_recommendations ARRAY<STRING>, token_directives ARRAY<STRING>, estimated_savings_percent STRING"
-)]) AS res""".strip(),
+  total_calls,
+  avg_prompt_tokens,
+  avg_completion_tokens,
+  avg_latency_ms,
+  p95_latency_ms,
+  res.token_recommendations AS token_recommendations,
+  res.token_directives AS token_directives,
+  res.estimated_savings_percent AS estimated_savings_percent,
+  res.status AS ai_status
+FROM GeneratedTokenOpt""".strip(),
                 "status": "SUCCESS",
                 "duration_ms": 1210,
                 "tables_referenced": [f"{project_id}.agent_telemetry.v_llm_response"],
@@ -681,8 +708,10 @@ from google.cloud import bigquery
 # In-memory storage for active simulation sessions: {session_id: SessionState}
 SESSIONS: Dict[str, "SimulationSession"] = {}
 
-# Shared GenAI client and persistent ADK runtime loop/runner
-_FRONTEND_GENAI_CLIENT: Optional[Any] = None
+# Vertex AI Agent Engine client cache and local ADK fallback runtime
+_AGENT_ENGINE_CLIENT: Optional[Any] = None
+_AGENT_ENGINE_CACHE: Dict[str, Any] = {}
+_AGENT_ENGINE_LOCK = threading.Lock()
 _ADK_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _ADK_RUNNER: Optional[Any] = None
 _ADK_INIT_LOCK = threading.Lock()
@@ -696,18 +725,73 @@ _PREWARM_GENERATION: int = 1
 _PREWARM_BUILDER_SEMAPHORE = threading.Semaphore(1)
 
 
-def _get_frontend_genai_client():
-    """Returns a cached google.genai.Client instance for frontend fallback turn generation."""
-    global _FRONTEND_GENAI_CLIENT
-    ensure_gemini_api_key(PROJECT_ID)
-    if _FRONTEND_GENAI_CLIENT is None:
-        from google import genai
-        _FRONTEND_GENAI_CLIENT = genai.Client()
-    return _FRONTEND_GENAI_CLIENT
+def _get_agent_engine(agent_id: str) -> Optional[Any]:
+    """Returns a cached Vertex AI Agent Engine handle for the given agent ID or resource name."""
+    if not agent_id or not PROJECT_ID:
+        return None
+    if agent_id in _AGENT_ENGINE_CACHE:
+        return _AGENT_ENGINE_CACHE[agent_id]
+
+    with _AGENT_ENGINE_LOCK:
+        if agent_id in _AGENT_ENGINE_CACHE:
+            return _AGENT_ENGINE_CACHE[agent_id]
+        try:
+            global _AGENT_ENGINE_CLIENT
+            import vertexai
+
+            if _AGENT_ENGINE_CLIENT is None:
+                _AGENT_ENGINE_CLIENT = vertexai.Client(project=PROJECT_ID, location=GCP_REGION)
+
+            resource_name = (
+                agent_id
+                if agent_id.startswith("projects/")
+                else f"projects/{PROJECT_ID}/locations/{GCP_REGION}/reasoningEngines/{agent_id}"
+            )
+            engine = _AGENT_ENGINE_CLIENT.agent_engines.get(name=resource_name)
+            _AGENT_ENGINE_CACHE[agent_id] = engine
+            logger.info(f"Connected to Vertex AI Agent Engine: {resource_name}")
+            return engine
+        except Exception as e:
+            logger.error(f"Failed to connect to Vertex AI Agent Engine '{agent_id}': {e}")
+            return None
+
+
+def _extract_agent_engine_events(events: Any) -> Tuple[str, List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Extracts text, tool call names, tool call dicts, and tool response dicts from Agent Engine stream_query events."""
+    text_parts: List[str] = []
+    tool_names: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    tool_responses: List[Dict[str, Any]] = []
+
+    for evt in events:
+        if not isinstance(evt, dict):
+            continue
+        if evt.get("error_message") or evt.get("error_code"):
+            raise RuntimeError(
+                f"Agent Engine error ({evt.get('error_code')}): {evt.get('error_message')}"
+            )
+        content = evt.get("content")
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts") or []
+        for p in parts:
+            if not isinstance(p, dict):
+                continue
+            if p.get("text"):
+                text_parts.append(str(p["text"]))
+            fc = p.get("function_call") or p.get("functionCall")
+            if isinstance(fc, dict) and fc.get("name"):
+                tool_names.append(str(fc["name"]))
+                tool_calls.append({"name": str(fc["name"]), "args": fc.get("args") or {}})
+            fr = p.get("function_response") or p.get("functionResponse")
+            if isinstance(fr, dict) and fr.get("name"):
+                tool_responses.append({"name": str(fr["name"]), "response": fr.get("response")})
+
+    return "".join(text_parts).strip(), tool_names, tool_calls, tool_responses
 
 
 def _ensure_adk_runtime() -> Tuple[Optional[asyncio.AbstractEventLoop], Optional[Any]]:
-    """Initializes and returns a persistent background asyncio event loop and shared ADK InMemoryRunner."""
+    """Initializes and returns a persistent background asyncio event loop and shared ADK InMemoryRunner (local fallback)."""
     global _ADK_LOOP, _ADK_RUNNER
     if _ADK_LOOP is not None and _ADK_RUNNER is not None and not _ADK_LOOP.is_closed():
         return _ADK_LOOP, _ADK_RUNNER
@@ -740,15 +824,27 @@ def _ensure_adk_runtime() -> Tuple[Optional[asyncio.AbstractEventLoop], Optional
             )
             t.start()
             loop_ready.wait(timeout=5.0)
-            logger.info("Initialized persistent ADK event loop and shared InMemoryRunner.")
+            logger.info("Initialized persistent local ADK event loop and shared InMemoryRunner.")
         except Exception as e:
-            logger.warning(f"Could not initialize persistent ADK runtime: {e}")
+            logger.warning(f"Could not initialize persistent local ADK runtime: {e}")
 
     return _ADK_LOOP, _ADK_RUNNER
 
 
 def _create_adk_session(user_id: str) -> Optional[str]:
-    """Creates a new ADK session on the shared persistent InMemoryRunner."""
+    """Creates a new Customer Service Agent session (Vertex AI Agent Engine if configured, else local ADK)."""
+    if CUSTOMER_SERVICE_AGENT_ID:
+        engine = _get_agent_engine(CUSTOMER_SERVICE_AGENT_ID)
+        if engine is not None:
+            try:
+                sess = engine.create_session(user_id=user_id)
+                sid = sess["id"] if isinstance(sess, dict) else getattr(sess, "id", None)
+                if sid:
+                    return str(sid)
+            except Exception as e:
+                logger.error(f"Remote Customer Service Agent session creation failed: {e}")
+                return None
+
     loop, runner = _ensure_adk_runtime()
     if not loop or not runner or not customer_service_app:
         return None
@@ -760,7 +856,23 @@ def _create_adk_session(user_id: str) -> Optional[str]:
         adk_session = fut.result(timeout=10.0)
         return adk_session.id
     except Exception as e:
-        logger.warning(f"ADK session creation fallback: {e}")
+        logger.warning(f"Local ADK session creation failed: {e}")
+        return None
+
+
+def _create_customer_agent_session(user_id: str) -> Optional[str]:
+    """Creates a new Customer Simulator Agent session on Vertex AI Agent Engine if configured."""
+    if not CUSTOMER_AGENT_ID:
+        return None
+    engine = _get_agent_engine(CUSTOMER_AGENT_ID)
+    if engine is None:
+        return None
+    try:
+        sess = engine.create_session(user_id=user_id)
+        sid = sess["id"] if isinstance(sess, dict) else getattr(sess, "id", None)
+        return str(sid) if sid else None
+    except Exception as e:
+        logger.error(f"Remote Customer Agent session creation failed: {e}")
         return None
 
 
@@ -779,94 +891,198 @@ def _sanitize_human_service_text_static(text: str) -> str:
     return cleaned
 
 
-def _generate_dynamic_service_turn_static(
+def _initiate_customer_persona_via_agent(
+    cust_session_id: Optional[str],
+    cust_user_id: str,
+) -> Dict[str, Any]:
+    """Delegates customer persona & opening turn generation to the deployed Customer Agent."""
+    if CUSTOMER_AGENT_ID and cust_session_id:
+        engine = _get_agent_engine(CUSTOMER_AGENT_ID)
+        if engine is not None:
+            try:
+                prompt = (
+                    "Start a new customer support simulation session. "
+                    "Call your generate_customer_persona tool once to create your customer persona, "
+                    "then output ONLY your opening chat message as that customer (1 to 3 sentences, in character)."
+                )
+                text, _tools, _calls, responses = _extract_agent_engine_events(
+                    engine.stream_query(
+                        user_id=cust_user_id,
+                        session_id=cust_session_id,
+                        message=prompt,
+                    )
+                )
+                persona: Optional[Dict[str, Any]] = None
+                for resp in responses:
+                    if resp.get("name") == "generate_customer_persona":
+                        raw = resp.get("response")
+                        if isinstance(raw, dict):
+                            # ADK wraps dict returns either directly or under 'result'
+                            candidate = raw.get("result") if isinstance(raw.get("result"), dict) else raw
+                            if candidate.get("customer_name") or candidate.get("product"):
+                                persona = dict(candidate)
+                                break
+                if persona is not None:
+                    if text and not persona.get("opening"):
+                        persona["opening"] = text
+                    logger.info(
+                        f"[Customer Agent Engine] Generated persona: {persona.get('customer_name')} "
+                        f"({persona.get('category')} | {persona.get('product')})"
+                    )
+                    return persona
+                logger.warning("Customer Agent did not return a structured persona tool response; falling back.")
+            except Exception as e:
+                logger.error(f"Remote Customer Agent persona generation failed: {e}")
+
+    return generate_customer_persona()
+
+
+def _execute_customer_turn(
+    cust_session_id: Optional[str],
+    cust_user_id: str,
+    service_text: str,
+    history_snapshot: List[Dict[str, str]],
+    persona: Dict[str, Any],
+) -> str:
+    """Delegates the next simulated customer reply to the deployed Customer Agent."""
+    cust_name = persona.get("customer_name") or persona.get("name", "Customer")
+    if CUSTOMER_AGENT_ID and cust_session_id:
+        engine = _get_agent_engine(CUSTOMER_AGENT_ID)
+        if engine is not None:
+            try:
+                prompt = (
+                    f"The ApexHome & Electro customer service representative just replied to you:\n"
+                    f"\"{service_text}\"\n\n"
+                    f"Respond naturally in character as {cust_name} (1 to 3 sentences maximum). "
+                    "Do not call any tools; just write your direct reply to customer service."
+                )
+                reply, _tools, _calls, _responses = _extract_agent_engine_events(
+                    engine.stream_query(
+                        user_id=cust_user_id,
+                        session_id=cust_session_id,
+                        message=prompt,
+                    )
+                )
+                if reply:
+                    reply = re.sub(
+                        r'^(Customer|Me|\b' + re.escape(cust_name) + r'\b):\s*',
+                        '',
+                        reply,
+                        flags=re.IGNORECASE,
+                    ).strip('"').strip()
+                    if reply:
+                        return reply
+            except Exception as e:
+                logger.error(f"Remote Customer Agent turn failed: {e}")
+
+    return generate_customer_turn(history_snapshot, persona, service_text)
+
+
+def _evaluate_and_persist_customer_rating(
+    cust_session_id: Optional[str],
+    cust_user_id: str,
     persona: Dict[str, Any],
     history: List[Dict[str, str]],
-    last_customer_text: str,
-) -> Tuple[str, List[str]]:
-    """Generates a dynamic, in-character customer service turn using Gemini 3.8 Flash."""
-    ensure_gemini_api_key(PROJECT_ID)
-    prod = persona.get("product", "item")
-    cust_name = persona.get("customer_name", "Customer")
-    order_id = persona.get("order_id", "ORD-1001")
-    category = persona.get("category", "General Inquiry")
+    aborted: bool = False,
+) -> Tuple[int, str, bool]:
+    """Delegates post-conversation rating evaluation and BigQuery persistence to the deployed Customer Agent.
 
-    history_lines = []
-    for t in history[-8:]:
-        role = "Customer" if t.get("role") == "customer" else "Apex Support AI"
-        history_lines.append(f"{role}: {t.get('content', '')}")
-    hist_block = "\n".join(history_lines)
+    Returns (rating, description, persisted_by_agent).
+    """
+    cust_id = int(persona.get("customer_id") or random.randint(100000, 999999))
+    cust_name = str(persona.get("customer_name") or persona.get("name", "Customer"))
 
-    okf_context = fetch_okf_dynamic_context().strip()
-    if okf_context:
-        okf_prompt_addition = (
-            f"\nActive Dynamic OKF Rules (HIGHEST PRIORITY - supersedes baseline gatekeeping and friction):\n{okf_context}\n"
+    if CUSTOMER_AGENT_ID and cust_session_id:
+        engine = _get_agent_engine(CUSTOMER_AGENT_ID)
+        if engine is not None:
+            try:
+                abort_note = (
+                    "The conversation was ended early by the user before full resolution. "
+                    if aborted
+                    else "The conversation has now concluded. "
+                )
+                prompt = (
+                    f"{abort_note}"
+                    f"Evaluate your overall customer support experience as {cust_name} (customer_id={cust_id}) "
+                    "on a scale of 1 to 5 with a concise 1-2 sentence review description. "
+                    f"You MUST call write_customer_rating_to_bigquery(customer_id={cust_id}, customer_name=\"{cust_name}\", "
+                    "rating=<1-5>, description=<your review>) to save your rating to BigQuery. "
+                    'Then return ONLY a JSON object: {"rating": <1-5>, "description": "<your review>"}.'
+                )
+                text, _tools, calls, responses = _extract_agent_engine_events(
+                    engine.stream_query(
+                        user_id=cust_user_id,
+                        session_id=cust_session_id,
+                        message=prompt,
+                    )
+                )
+                rating: Optional[int] = None
+                description: str = ""
+                persisted = False
+
+                for call in calls:
+                    if call.get("name") == "write_customer_rating_to_bigquery":
+                        args = call.get("args") or {}
+                        if args.get("rating") is not None:
+                            try:
+                                rating = max(1, min(5, int(args["rating"])))
+                            except (ValueError, TypeError):
+                                pass
+                        if args.get("description"):
+                            description = str(args["description"])
+
+                for resp in responses:
+                    if resp.get("name") == "write_customer_rating_to_bigquery":
+                        raw = resp.get("response")
+                        if isinstance(raw, dict):
+                            res_obj = raw.get("result") if isinstance(raw.get("result"), dict) else raw
+                            if res_obj.get("status") == "success":
+                                persisted = True
+                            row = res_obj.get("row")
+                            if isinstance(row, dict):
+                                if rating is None and row.get("rating") is not None:
+                                    rating = max(1, min(5, int(row["rating"])))
+                                if not description and row.get("description"):
+                                    description = str(row["description"])
+
+                if (rating is None or not description) and text:
+                    m = re.search(r'\{[^{}]*"rating"[^{}]*\}', text, flags=re.DOTALL)
+                    if m:
+                        try:
+                            parsed = json.loads(m.group(0))
+                            if rating is None and parsed.get("rating") is not None:
+                                rating = max(1, min(5, int(parsed["rating"])))
+                            if not description and parsed.get("description"):
+                                description = str(parsed["description"])
+                        except Exception:
+                            pass
+
+                if rating is not None and description:
+                    logger.info(
+                        f"[Customer Agent Engine] Evaluated rating={rating}/5 "
+                        f"(persisted_by_agent={persisted}) for {cust_name}"
+                    )
+                    return rating, description, persisted
+            except Exception as e:
+                logger.error(f"Remote Customer Agent rating evaluation failed: {e}")
+
+    if aborted:
+        return (
+            2,
+            f"Conversation ended early by user request for {persona.get('product', 'product')}.",
+            False,
         )
-        demeanor_guidelines = (
-            "- Post-Audit Improved Demeanor (OKF Rules Active): Follow the Active Dynamic OKF Rules above immediately. Be constructive, clear, and solution-oriented.\n"
-            "- Proactive Resolution: Do not stonewall or force unnecessary bureaucratic hurdles when an OKF rule applies. Proactively issue RMAs, waive restocking/freight fees on defects or exchanges, schedule technicians, or provide ARN bank release letters to resolve the customer's issue smoothly."
-        )
-    else:
-        okf_prompt_addition = ""
-        demeanor_guidelines = (
-            "- Baseline Demeanor (No OKF Overrides Active): Do NOT be warm, eager, or overly helpful. Avoid apologies or corporate pleasantries. Sound like a dry, strictly procedural support rep who is somewhat unempathetic and enforces company rules by the book, without being abusive or completely refusing to help.\n"
-            "- Strict Gatekeeping & Friction: Do NOT immediately hand out fee waivers or hassle-free approvals on Turn 1 or Turn 2. On early turns, push the burden onto the customer: insist on DIY troubleshooting first, cite the 15% open-box restocking fee and $100-$150 return freight deduction, enforce 48-hour carrier trace waits, and cite 5-7 day bank hold periods. After the customer pushes back across 1-2 turns, do NOT flat-out refuse service; instead, reluctantly provide a conditional, bureaucratic resolution (e.g., schedule a standard technician in 2-3 business days with a non-defect fee warning, issue an RMA subject to the 15% restocking fee or exchange requirement, or open a 48-hour trace ticket) so the issue resolves with noticeable friction."
-        )
-
-    prompt = f"""You are a human customer service representative working live support chat for ApexHome & Electro.
-Customer: {cust_name}
-Order ID: {order_id}
-Product: {prod}
-Category: {category}
-{okf_prompt_addition}
-Conversation History:
-{hist_block}
-
-Customer just said:
-"{last_customer_text}"
-
-Strict Guidelines:
-- Speak like an authentic human support representative on live chat.
-- LENGTH LIMIT: Strictly maximum 2 to 3 sentences per response. Never write more than 3 sentences.
-- NO MARKDOWN BOLDING: Absolutely never use '**' for bold text. Write plain text only.
-- NO LONG DASHES: Never use long dashes (em-dash, en-dash, or double hyphens '--'). Use commas or standard periods.
-{demeanor_guidelines}
-
-Respond directly as support:
-"""
-    tools_used = ["search_product_catalog"]
-    lower_input = last_customer_text.lower()
-    if "order" in lower_input or "tracking" in lower_input or "deliver" in lower_input or "ship" in lower_input:
-        tools_used = ["check_order_status"]
-    elif "warranty" in lower_input or "repair" in lower_input or "technician" in lower_input:
-        tools_used = ["lookup_warranty_policy"]
-    elif "return" in lower_input or "refund" in lower_input or "rma" in lower_input or "exchange" in lower_input:
-        tools_used = ["initiate_return"]
-    elif "charge" in lower_input or "fee" in lower_input or "card" in lower_input or "bill" in lower_input or "bank" in lower_input:
-        tools_used = ["lookup_billing_and_refund_status"]
 
     try:
-        from google.genai import types
+        r, fb = evaluate_customer_experience(persona, history)
+        if r is not None and fb:
+            return int(r), str(fb), False
+    except Exception as eval_err:
+        logger.info(f"Local evaluation fallback: {eval_err}")
 
-        client = _get_frontend_genai_client()
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.85,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        text = response.text.strip()
-        text = re.sub(r'^(Apex Support AI|Apex Support|Support|Agent):\s*', '', text, flags=re.IGNORECASE)
-        return _sanitize_human_service_text_static(text), tools_used
-    except Exception as e:
-        logger.warning(f"Dynamic service turn fallback: {e}")
-        ticket_num = f"TC-{random.randint(10000, 99999)}"
-        return (
-            f"I noted your issue with the {prod} under reference {ticket_num}. We need you to check the power and error code before we can discuss an exchange or technician.",
-            tools_used,
-        )
+    rating_fb = int(persona.get("expected_rating") or 3)
+    desc_fb = str(persona.get("rating_feedback") or "Completed support interaction.")
+    return rating_fb, desc_fb, False
 
 
 def _execute_service_turn(
@@ -876,13 +1092,40 @@ def _execute_service_turn(
     persona: Dict[str, Any],
     history: List[Dict[str, str]],
 ) -> Tuple[str, List[str]]:
-    """Executes a Customer Service Agent turn on the shared ADK runtime with fallback to direct model call."""
+    """Delegates a Customer Service Agent turn to Vertex AI Agent Engine (or local ADK runtime if unconfigured).
+
+    The frontend never generates customer service responses itself.
+    """
     live_text = ""
     live_tools: List[str] = []
-    loop, runner = _ensure_adk_runtime()
 
-    if loop and runner and adk_session_id and last_customer_text:
-        try:
+    # 1. Primary path: Deployed Customer Service Agent on Vertex AI Agent Engine
+    if CUSTOMER_SERVICE_AGENT_ID:
+        engine = _get_agent_engine(CUSTOMER_SERVICE_AGENT_ID)
+        if engine is not None and last_customer_text:
+            session_id_to_use = adk_session_id or _create_adk_session(adk_user_id)
+            if session_id_to_use:
+                try:
+                    live_text, live_tools, _calls, _responses = _extract_agent_engine_events(
+                        engine.stream_query(
+                            user_id=adk_user_id,
+                            session_id=session_id_to_use,
+                            message=last_customer_text,
+                        )
+                    )
+                    logger.info(
+                        f"[Customer Service Agent Engine] Turn completed "
+                        f"(session={session_id_to_use}, tools={live_tools})"
+                    )
+                except Exception as remote_err:
+                    logger.error(f"Remote Customer Service Agent turn failed: {remote_err}")
+                    raise
+        if not live_text.strip():
+            raise RuntimeError("Customer Service Agent Engine returned an empty response.")
+    else:
+        # 2. Local development fallback: run local ADK Customer Service App via InMemoryRunner
+        loop, runner = _ensure_adk_runtime()
+        if loop and runner and adk_session_id and last_customer_text:
             async def _run_agent_turn():
                 nonlocal live_text, live_tools
                 from google.genai.types import Content, Part
@@ -898,27 +1141,24 @@ def _execute_service_turn(
                                 live_tools.append(p.function_call.name)
                 if customer_service_telemetry_plugin:
                     try:
-                        asyncio.create_task(customer_service_telemetry_plugin.flush())
+                        await customer_service_telemetry_plugin.flush()
                     except Exception:
                         pass
 
             fut = asyncio.run_coroutine_threadsafe(_run_agent_turn(), loop)
             fut.result(timeout=35.0)
-        except Exception as live_err:
-            logger.info(f"ADK customer service turn execution note: {live_err}")
-
-    if not live_text.strip():
-        live_text, fb_tools = _generate_dynamic_service_turn_static(persona, history, last_customer_text)
-        if not live_tools:
-            live_tools = fb_tools
+        if not live_text.strip():
+            raise RuntimeError("Local Customer Service ADK agent returned an empty response.")
 
     service_text = _sanitize_human_service_text_static(live_text)
-    tools = live_tools or ["search_product_catalog"]
+    tools = live_tools or []
     return service_text, tools
 
 
 def _register_order_for_persona(persona: Dict[str, Any]) -> None:
-    """Registers dynamic order with customer service tools so lookup tools find it."""
+    """Registers dynamic order with local customer service tools (used in local dev mode)."""
+    if CUSTOMER_SERVICE_AGENT_ID:
+        return
     try:
         register_customer_order({
             "order_id": persona.get("order_id"),
@@ -940,13 +1180,15 @@ def _register_order_for_persona(persona: Dict[str, Any]) -> None:
 # Pre-Warmed Dialog Pool Manager (Target Pool Size = 2)
 # =====================================================================
 class PrewarmedDialogSlot:
-    """Holds a pre-warmed customer persona (Turn 1), registered order, ADK session, and Customer Service reply (Turn 2)."""
+    """Holds a pre-warmed customer persona (Turn 1), remote agent sessions, and Customer Service reply (Turn 2)."""
 
     def __init__(self, slot_id: str, generation: int):
         self.slot_id = slot_id
         self.generation = generation
         self.created_at = time.time()
         self.persona: Optional[Dict[str, Any]] = None
+        self.cust_session_id: Optional[str] = None
+        self.cust_user_id: Optional[str] = None
         self.adk_session_id: Optional[str] = None
         self.adk_user_id: Optional[str] = None
         self.turn2_text: Optional[str] = None
@@ -957,7 +1199,7 @@ class PrewarmedDialogSlot:
 
 
 def _populate_prewarm_slot(slot: PrewarmedDialogSlot) -> None:
-    """Background worker that populates a PrewarmedDialogSlot with Persona (Turn 1), ADK session, and Turn 2."""
+    """Background worker that populates a PrewarmedDialogSlot via Customer Agent and Customer Service Agent."""
     with _PREWARM_BUILDER_SEMAPHORE:
         if slot.generation != _PREWARM_GENERATION:
             slot.is_building = False
@@ -967,12 +1209,15 @@ def _populate_prewarm_slot(slot: PrewarmedDialogSlot) -> None:
 
         t0 = time.time()
         try:
-            # 1. Ensure OKF dynamic context cache is warm
-            fetch_okf_dynamic_context()
+            # 1. Create Customer Agent session and delegate Turn 1 persona + opening generation
+            temp_uid = f"cust_{random.randint(100000, 999999)}"
+            slot.cust_user_id = temp_uid
+            slot.cust_session_id = _create_customer_agent_session(temp_uid)
 
-            # 2. Generate live customer persona (Turn 1) if not already set
             if slot.persona is None:
-                slot.persona = generate_customer_persona()
+                slot.persona = _initiate_customer_persona_via_agent(
+                    slot.cust_session_id, slot.cust_user_id
+                )
 
             if slot.generation != _PREWARM_GENERATION:
                 return
@@ -984,11 +1229,11 @@ def _populate_prewarm_slot(slot: PrewarmedDialogSlot) -> None:
             slot.persona_ready.set()
             t_persona = time.time()
             logger.info(
-                f"[Prewarm Pool] Slot {slot.slot_id} Turn 1 & ADK session ready in {t_persona - t0:.2f}s "
+                f"[Prewarm Pool] Slot {slot.slot_id} Turn 1 & agent sessions ready in {t_persona - t0:.2f}s "
                 f"({slot.persona.get('customer_name')} | {slot.persona.get('product')})"
             )
 
-            # 3. Pre-warm Turn 2 (Customer Service Agent first reply)
+            # 2. Pre-warm Turn 2 (Customer Service Agent first reply)
             if slot.generation != _PREWARM_GENERATION:
                 return
 
@@ -1101,11 +1346,15 @@ def acquire_prewarmed_slot() -> PrewarmedDialogSlot:
     if chosen is not None and not chosen.persona_ready.is_set():
         chosen.persona_ready.wait(timeout=1.2)
 
-    # If no slot had a persona ready within 1.2s (e.g., instant cold start), synthesize immediately
+    # If no slot had a persona ready within 1.2s (e.g., instant cold start), delegate immediately
     if chosen is None or chosen.persona is None:
         slot_id = f"pw-fast-{int(time.time() * 1000)}"
         fast_slot = PrewarmedDialogSlot(slot_id=slot_id, generation=_PREWARM_GENERATION)
-        fast_slot.persona = _procedural_fallback_persona()
+        fast_slot.cust_user_id = f"cust_{random.randint(100000, 999999)}"
+        fast_slot.cust_session_id = _create_customer_agent_session(fast_slot.cust_user_id)
+        fast_slot.persona = _initiate_customer_persona_via_agent(
+            fast_slot.cust_session_id, fast_slot.cust_user_id
+        )
         _register_order_for_persona(fast_slot.persona)
         cust_id = fast_slot.persona.get("customer_id") or random.randint(100000, 999999)
         fast_slot.adk_user_id = f"cust_{cust_id}"
@@ -1126,6 +1375,8 @@ def acquire_prewarmed_slot() -> PrewarmedDialogSlot:
                 )
                 fast_slot.turn2_text = srv_text
                 fast_slot.turn2_tools = srv_tools
+            except Exception as e:
+                logger.warning(f"[Prewarm Pool] Fast slot Turn 2 failed: {e}")
             finally:
                 fast_slot.is_building = False
                 fast_slot.turn2_ready.set()
@@ -1161,6 +1412,12 @@ class SimulationSession:
         self.start_time = time.time()
         self.thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self.cust_user_id: Optional[str] = (
+            prewarm_slot.cust_user_id if prewarm_slot and prewarm_slot.cust_user_id else None
+        )
+        self.cust_session_id: Optional[str] = (
+            prewarm_slot.cust_session_id if prewarm_slot and prewarm_slot.cust_session_id else None
+        )
 
     def start(self):
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -1247,31 +1504,16 @@ class SimulationSession:
         """Sanitizes service text to ensure human-like brevity, no markdown bolding, and no long dashes."""
         return _sanitize_human_service_text_static(text)
 
-    def _generate_dynamic_service_turn(self, last_customer_text: str) -> Tuple[str, List[str]]:
-        """Generates a dynamic, in-character customer service turn using Gemini 3.8 Flash."""
-        return _generate_dynamic_service_turn_static(self.persona, self.history, last_customer_text)
-
-    def _generate_contextual_customer_reply(self, service_text: str) -> str:
-        """Contextual procedural fallback for customer turns."""
-        prod = self.persona.get("product", "item")
-        patience = self.persona.get("patience", "Moderate")
-        if patience == "Low":
-            return f"I need a concrete resolution for my {prod} today without having to jump through unnecessary hurdles."
-        elif patience == "High":
-            return f"Understood. I will follow those instructions on my {prod}. What is the reference number if this does not resolve it?"
-        else:
-            return f"Thank you for the update on my {prod}. Please confirm what the next steps are so we can get this sorted out."
-
     def _safe_generate_customer_turn(self, history_snapshot: List[Dict[str, str]], service_text: str) -> str:
-        """Generates a customer reply safely with fallback."""
-        reply = None
-        try:
-            reply = generate_customer_turn(history_snapshot, self.persona, service_text)
-        except Exception as turn_err:
-            logger.info(f"Live customer turn generation note: {turn_err}")
-        if not reply:
-            reply = self._generate_contextual_customer_reply(service_text)
-        return reply
+        """Delegates the next customer reply to the Customer Simulator Agent."""
+        cust_user_id = self.cust_user_id or f"cust_{self.persona.get('customer_id', 100001)}"
+        return _execute_customer_turn(
+            cust_session_id=self.cust_session_id,
+            cust_user_id=cust_user_id,
+            service_text=service_text,
+            history_snapshot=history_snapshot,
+            persona=self.persona,
+        )
 
     def _run_loop(self):
         """Simulates an engaging, realistic multi-turn (6-8 turns) conversation with pre-warmed start & overlapped pacing."""
@@ -1322,7 +1564,7 @@ class SimulationSession:
             )
             last_customer_text = opening_text
 
-            # Resolve ADK session ID from prewarm slot or create one on persistent runner
+            # Resolve agent session IDs from prewarm slot or create them on Vertex AI Agent Engine
             adk_user_id = (
                 self.prewarm_slot.adk_user_id
                 if self.prewarm_slot and self.prewarm_slot.adk_user_id
@@ -1333,6 +1575,10 @@ class SimulationSession:
                 if self.prewarm_slot and self.prewarm_slot.adk_session_id
                 else _create_adk_session(adk_user_id)
             )
+            if not self.cust_user_id:
+                self.cust_user_id = f"cust_{cust_id}"
+            if not self.cust_session_id:
+                self.cust_session_id = _create_customer_agent_session(self.cust_user_id)
 
             # Futures for overlapping Turn N+1 generation while Turn N is typing/displayed
             prefetched_customer_future: Optional[Future] = None
@@ -1580,23 +1826,30 @@ class SimulationSession:
                 },
             )
             t_eval_start = time.time()
-            rating, description = self._evaluate_session()
+            rating, description, persisted_by_agent = _evaluate_and_persist_customer_rating(
+                cust_session_id=self.cust_session_id,
+                cust_user_id=self.cust_user_id or f"cust_{cust_id}",
+                persona=self.persona,
+                history=list(self.history),
+                aborted=self.stop_requested.is_set(),
+            )
             eval_elapsed = time.time() - t_eval_start
             rem_eval_delay = max(0.0, eval_delay - eval_elapsed)
             self._sleep_interruptible(rem_eval_delay)
 
             now_iso = datetime.now(timezone.utc).isoformat()
-            try:
-                write_customer_rating_to_bigquery(
-                    customer_id=cust_id,
-                    customer_name=cust_name,
-                    rating=rating,
-                    description=description,
-                    timestamp=now_iso,
-                    project_id=PROJECT_ID,
-                )
-            except Exception as db_err:
-                logger.warning(f"BigQuery demo.customer_ratings persistence note: {db_err}")
+            if not persisted_by_agent:
+                try:
+                    write_customer_rating_to_bigquery(
+                        customer_id=cust_id,
+                        customer_name=cust_name,
+                        rating=rating,
+                        description=description,
+                        timestamp=now_iso,
+                        project_id=PROJECT_ID,
+                    )
+                except Exception as db_err:
+                    logger.warning(f"BigQuery demo.customer_ratings persistence note: {db_err}")
 
             self.emit(
                 "rating",

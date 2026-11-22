@@ -1088,7 +1088,7 @@
               <span class="badge" style="background: rgba(139, 92, 246, 0.15); color: #c084fc;">Multi-Agent Pipeline</span>
             </div>
             <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 1rem; line-height: 1.4;">
-              Audits interaction telemetry in BigQuery, designs token optimizations, and commits refined Open Knowledge Format (OKF v0.2) rules directly to GitHub.
+              Audits customer ratings (<code>demo.customer_ratings</code>) and agent interaction telemetry (<code>agent_telemetry</code>) in BigQuery, designs token optimizations, and commits refined Open Knowledge Format (OKF v0.2) rules directly to GitHub.
             </p>
             <div class="btn-group" style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
               <button class="btn btn-purple" id="btn-auditor" onclick="runAuditorAgent()">
@@ -2147,11 +2147,47 @@
         const box = document.getElementById('auditor-results');
         const issuesList = document.getElementById('auditor-issues-list');
         issuesList.innerHTML = '';
-        report.detected_issues.forEach(issue => {
+        const cfIssues = Array.isArray(report.customer_feedback_issues) ? report.customer_feedback_issues : [];
+        const tmIssues = Array.isArray(report.telemetry_issues) ? report.telemetry_issues : [];
+        const cfSet = new Set(cfIssues);
+        const allIssues = Array.isArray(report.detected_issues) ? report.detected_issues : [];
+        allIssues.forEach(issue => {
           const li = document.createElement('li');
-          li.innerText = issue;
+          li.style.marginBottom = '0.3rem';
+          const isCf = cfSet.has(issue);
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.style.fontSize = '0.7rem';
+          badge.style.marginRight = '0.4rem';
+          badge.style.padding = '0.1rem 0.45rem';
+          if (isCf) {
+            badge.style.background = 'rgba(245, 158, 11, 0.2)';
+            badge.style.color = '#fbbf24';
+            badge.innerText = 'Customer Feedback';
+          } else {
+            badge.style.background = 'rgba(96, 165, 250, 0.2)';
+            badge.style.color = '#93c5fd';
+            badge.innerText = 'Agent Metrics';
+          }
+          li.appendChild(badge);
+          li.appendChild(document.createTextNode(issue));
           issuesList.appendChild(li);
         });
+
+        const cfPolicyCount = Array.isArray(report.customer_feedback_policies) ? report.customer_feedback_policies.length : 0;
+        const avgCsatDisplay = (report.average_rating !== undefined && report.average_rating !== null) ? Number(report.average_rating).toFixed(2) : '-';
+        const totalRated = report.total_rated_sessions ?? '-';
+        const lowRated = report.low_ratings_count ?? '-';
+        const ratingsBannerHtml = `
+          <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 0.55rem 0.8rem; margin-bottom: 0.6rem;">
+            <div style="color: #fbbf24; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+              <span>⭐</span> <span>Customer Ratings Audited (<code>demo.customer_ratings</code>)</span>
+              <span class="badge" style="background: rgba(245, 158, 11, 0.22); color: #fde68a; font-size: 0.72rem; margin-left: auto;">Avg CSAT: ${avgCsatDisplay} / 5.0</span>
+            </div>
+            <div style="color: #cbd5e1; font-size: 0.78rem; margin-top: 0.25rem;">
+              Analyzed <strong>${totalRated}</strong> ratings (<strong>${lowRated}</strong> low ratings ≤ 3★) → synthesized <strong>${cfIssues.length}</strong> customer issues &amp; <strong>${cfPolicyCount}</strong> <code>[Based on: Customer Feedback]</code> rules.
+            </div>
+          </div>`;
 
         const statsEl = document.getElementById('auditor-stats');
         if (report.github_commit_success) {
@@ -2159,7 +2195,7 @@
           const branchStatusBadge = targetBranch === 'new_version'
             ? '<span class="badge" style="background: rgba(245, 158, 11, 0.25); color: #fbbf24; font-size: 0.75rem;">Awaiting Human Review</span>'
             : '<span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; font-size: 0.75rem;">Main Production</span>';
-          statsEl.innerHTML = `
+          statsEl.innerHTML = ratingsBannerHtml + `
             <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="color: #34d399; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
                 <span>✅</span> <span>GitHub Sync Active</span>
@@ -2172,7 +2208,7 @@
         } else {
           const statusMsg = report.github_commit_status || '';
           const isDeployKeyNotice = statusMsg.toLowerCase().includes('deploy key') || statusMsg.toLowerCase().includes('publickey') || statusMsg.toLowerCase().includes('github-deploy-key');
-          statsEl.innerHTML = `
+          statsEl.innerHTML = ratingsBannerHtml + `
             <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;">
               <div style="color: #fbbf24; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
                 <span>⚠️</span> <span>${isDeployKeyNotice ? 'Deploy Key Configuration Required' : 'GitHub Sync Notice'}</span>

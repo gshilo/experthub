@@ -47,6 +47,9 @@ DATASET_ID = "demo"
 DATASET_LOCATION = "US"
 TABLE_ID = "customer_ratings"
 MODEL_NAME = "gemini-3.8-flash"
+# gemini-3.8-flash on Vertex AI is served from the 'global' location endpoint
+os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
+os.environ["GOOGLE_CLOUD_LOCATION"] = "global"
 
 
 _SECRET_CACHE: Dict[str, str] = {}

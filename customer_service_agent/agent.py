@@ -50,6 +50,9 @@ def _resolve_project_id() -> str:
 PROJECT_ID = _resolve_project_id()
 LOCATION = os.environ.get("GCP_REGION", "us-central1")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
+# gemini-3.8-flash on Vertex AI is served from the 'global' location endpoint
+os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
+os.environ["GOOGLE_CLOUD_LOCATION"] = "global"
 DEPLOY_KEY_SECRET_NAME = os.environ.get("GITHUB_DEPLOY_KEY_SECRET_NAME", "github-deploy-key")
 REPO_NAME = "gshilo/experthub_context"
 MAIN_BRANCH = "main"
