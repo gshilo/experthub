@@ -1,6 +1,7 @@
 {
   "env_vars": {
     "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false"
+    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+    "GITHUB_DEPLOY_KEY_SECRET_NAME": "github-deploy-key"
   }
 }
