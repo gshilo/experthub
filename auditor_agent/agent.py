@@ -2254,7 +2254,7 @@ def _get_telemetry_and_ai_schema_guide(project_id: str = PROJECT_ID) -> str:
    - `{project_id}.agent_telemetry.v_tool_error`, `v_llm_error`, `v_agent_error`: `timestamp`, `session_id`, `error_message` STRING, `total_ms` INT64.
 
 3. `{project_id}.demo.customer_ratings` (Post-Session Customer Satisfaction & Reviews):
-   - `customer_id` INT64, `customer_name` STRING, `rating` INT64 (1 to 5), `description` STRING (verbal review), `timestamp` TIMESTAMP.
+   - `customer_id` INT64, `customer_name` STRING, `rating` INT64 (1 to 5), `description` STRING (verbal review), `timestamp` DATETIME (note: `DATETIME`, NOT `TIMESTAMP`; use `DATETIME_TRUNC(timestamp, HOUR)` for time-bucketing `demo.customer_ratings`).
 
 Available BigQuery AI Functions (Connection `'us.gemini'`):
 - `AI.GENERATE(prompt, connection_id => 'us.gemini', endpoint => 'gemini-3.8-flash', output_schema => '...')`: Returns a typed STRUCT matching `output_schema`. Unpack in `FROM` clause using `UNNEST([AI.GENERATE(...)]) AS res`.
@@ -2283,7 +2283,7 @@ CRITICAL RULES:
 2. If the question asks for trends, satisfaction/sentiment/interactions over time, history, or hourly/daily change:
    - Must use `AI.CLASSIFY` to assign sentiment ('Positive', 'Neutral', 'Negative') to each row.
    - By default, query `{project_id}.demo.customer_ratings` (classifying `description` and averaging `rating`). Only query `{project_id}.agent_telemetry.agent_events` (`event_type = 'USER_MESSAGE_RECEIVED'` with `JSON_VALUE(content, '$.text_summary')`) if the user explicitly asks for turn-level chat messages.
-   - Aggregate by hourly time unit using `TIMESTAMP_TRUNC(timestamp, HOUR)` AS `time_bucket` (always use `HOUR` granularity for time-series charts, not `DAY`).
+   - Aggregate by hourly time unit AS `time_bucket` (always use `HOUR` granularity for time-series charts, not `DAY`): use `DATETIME_TRUNC(timestamp, HOUR)` when querying `{project_id}.demo.customer_ratings` (because `demo.customer_ratings.timestamp` is `DATETIME`), and `TIMESTAMP_TRUNC(timestamp, HOUR)` when querying `{project_id}.agent_telemetry.agent_events` (because `agent_events.timestamp` is `TIMESTAMP`).
    - Group by `time_bucket` and calculate:
      - `total_interactions`: COUNT(*)
      - `positive_count`: COUNTIF(sentiment = 'Positive')
@@ -2981,18 +2981,38 @@ def _process_chart_analysis_query(
         ai_functions = dynamic_gen.get("ai_functions", ["AI.CLASSIFY"])
         tables_referenced = dynamic_gen.get("tables_referenced", [f"{project_id}.demo.customer_ratings"])
         sql = dynamic_gen["sql"]
+        sql_lower = sql.lower()
+        targets_ratings_only = (
+            "customer_ratings" in sql_lower
+            and "agent_telemetry" not in sql_lower
+            and "agent_events" not in sql_lower
+        )
+        trunc_fn = "DATETIME_TRUNC" if targets_ratings_only else "TIMESTAMP_TRUNC"
+        sql = re.sub(
+            r"DATETIME_TRUNC\(\s*([^,]+?)\s*,\s*DAY\s*\)",
+            r"DATETIME_TRUNC(\1, HOUR)",
+            sql,
+            flags=re.IGNORECASE,
+        )
         sql = re.sub(
             r"TIMESTAMP_TRUNC\(\s*([^,]+?)\s*,\s*DAY\s*\)",
-            r"TIMESTAMP_TRUNC(\1, HOUR)",
+            rf"{trunc_fn}(\1, HOUR)",
             sql,
             flags=re.IGNORECASE,
         )
         sql = re.sub(
             r"DATE_TRUNC\(\s*([^,]+?)\s*,\s*DAY\s*\)",
-            r"TIMESTAMP_TRUNC(\1, HOUR)",
+            rf"{trunc_fn}(\1, HOUR)",
             sql,
             flags=re.IGNORECASE,
         )
+        if targets_ratings_only:
+            sql = re.sub(
+                r"TIMESTAMP_TRUNC\(\s*(?!TIMESTAMP\()([^,]+?)\s*,\s*([A-Za-z_]+)\s*\)",
+                r"DATETIME_TRUNC(\1, \2)",
+                sql,
+                flags=re.IGNORECASE,
+            )
     elif any(
         w in q_lower
         for w in [
@@ -3062,7 +3082,7 @@ def _process_chart_analysis_query(
                 WITH CategorizedFeedback AS (
                   SELECT
                     timestamp,
-                    TIMESTAMP_TRUNC(timestamp, {time_bucket}) AS time_bucket,
+                    DATETIME_TRUNC(timestamp, {time_bucket}) AS time_bucket,
                     rating,
                     description,
                     AI.CLASSIFY(
