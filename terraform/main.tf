@@ -51,8 +51,6 @@ locals {
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
     "roles/aiplatform.user",
-    "roles/alloydb.client",
-    "roles/alloydb.databaseUser",
     "roles/compute.networkAdmin",
     "roles/dns.peer",
     "roles/serviceusage.serviceUsageConsumer",
@@ -80,8 +78,6 @@ locals {
   aiplatform_sa_roles = [
     "roles/compute.networkAdmin",
     "roles/dns.peer",
-    "roles/alloydb.client",
-    "roles/alloydb.databaseUser",
     "roles/serviceusage.serviceUsageConsumer"
   ]
 
@@ -89,8 +85,6 @@ locals {
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
     "roles/secretmanager.secretAccessor",
-    "roles/alloydb.client",
-    "roles/alloydb.databaseUser",
     "roles/storage.objectAdmin", # Required for `adk deploy agent_engine` staging artifacts (not an OKF bucket)
     "roles/compute.networkAdmin",
     "roles/dns.peer",
@@ -282,7 +276,7 @@ resource "google_bigquery_table" "customer_ratings" {
     },
     {
       name = "timestamp"
-      type = "TIMESTAMP"
+      type = "DATETIME"
       mode = "NULLABLE"
     }
   ])
