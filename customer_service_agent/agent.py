@@ -9,6 +9,10 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import shlex
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -25,7 +29,6 @@ from google.adk.plugins.bigquery_agent_analytics_plugin import (
 )
 from google.cloud import bigquery
 from google.cloud import secretmanager
-from google.cloud import storage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -48,10 +51,8 @@ PROJECT_ID = _resolve_project_id()
 LOCATION = os.environ.get("GCP_REGION", "us-central1")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
 DEPLOY_KEY_SECRET_NAME = os.environ.get("GITHUB_DEPLOY_KEY_SECRET_NAME", "github-deploy-key")
-SECRET_NAME = os.environ.get("GITHUB_SECRET_NAME", "github-pat")
 REPO_NAME = "gshilo/experthub_context"
-OKF_BUCKET_NAME = os.environ.get("OKF_BUCKET_NAME", "instructions91")
-OKF_BUCKET_LOCATION = os.environ.get("OKF_BUCKET_LOCATION", "US")
+MAIN_BRANCH = "main"
 OKF_FILENAME = "dynamic_context.md"
 OKF_FALLBACK_FILENAME = "dynamic_content.md"
 
@@ -65,7 +66,7 @@ _OKF_CACHE_LOCK = threading.Lock()
 _OKF_CACHE_TTL = 120.0  # seconds (2 minutes)
 
 
-def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
+def get_secret(secret_id: str = DEPLOY_KEY_SECRET_NAME, project: str = PROJECT_ID) -> str:
     """Retrieves secret from Google Cloud Secret Manager with in-memory cache and fallback to env var.
 
     API keys and credentials are never stored in static files.
@@ -91,11 +92,7 @@ def get_secret(secret_id: str = SECRET_NAME, project: str = PROJECT_ID) -> str:
 
     # Fallback to env var if Secret Manager access fails
     val = ""
-    if secret_id in ("github-pat", SECRET_NAME):
-        env_token = os.environ.get("GITHUB_PAT") or os.environ.get("GITHUB_TOKEN")
-        if env_token:
-            val = env_token.strip()
-    elif secret_id in ("github-deploy-key", DEPLOY_KEY_SECRET_NAME):
+    if secret_id in ("github-deploy-key", DEPLOY_KEY_SECRET_NAME):
         env_key = os.environ.get("GITHUB_DEPLOY_KEY") or os.environ.get("SSH_DEPLOY_KEY")
         if env_key:
             val = env_key.strip()
@@ -148,52 +145,117 @@ def ensure_gemini_api_key(project_id: str = PROJECT_ID) -> Optional[str]:
 ensure_gemini_api_key(PROJECT_ID)
 
 
-def ensure_okf_bucket(
-    bucket_name: str = OKF_BUCKET_NAME,
-    project_id: str = PROJECT_ID,
-    location: str = OKF_BUCKET_LOCATION,
-) -> storage.Bucket:
-    """Ensures that the Google Cloud Storage bucket exists; creates it in location 'US' if missing."""
-    client = storage.Client(project=project_id)
-    bucket = client.bucket(bucket_name)
-    if not bucket.exists():
-        try:
-            logger.info(f"GCS bucket '{bucket_name}' not found. Creating bucket in location '{location}'...")
-            bucket = client.create_bucket(bucket, location=location)
-            logger.info(f"Successfully created GCS bucket '{bucket_name}' in '{location}'.")
-        except Exception as e:
-            if "Conflict" in str(e) or "409" in str(e) or "Already Exists" in str(e):
-                logger.info(f"Bucket '{bucket_name}' was already created concurrently.")
-                bucket = client.bucket(bucket_name)
-            else:
-                logger.error(f"Failed to create GCS bucket '{bucket_name}': {e}")
-                raise
-    return bucket
+def fetch_okf_via_git_ssh(
+    private_key_pem: str,
+    repo_name: str = REPO_NAME,
+    branch: str = MAIN_BRANCH,
+    repo_url: Optional[str] = None,
+) -> str:
+    """Fetches dynamic OKF context from GitHub over SSH strictly from the target branch ('main').
 
-
-def _fetch_okf_from_remote() -> str:
-    """Fetches dynamic OKF rules from Google Cloud Storage bucket 'instructions91'.
-
-    If the bucket does not exist on this dynamic context load, it creates it.
+    Writes the SSH deploy key to a secure temporary file (0o600), clones only the target branch
+    using GIT_SSH_COMMAND, reads dynamic_context.md (with dynamic_content.md fallback), and
+    always removes the temporary key file and repository directory in a finally block.
     """
+    if not private_key_pem or is_placeholder_token(private_key_pem):
+        logger.warning("GitHub SSH deploy key is missing or placeholder. Using baseline demeanor.")
+        return ""
+
+    temp_dir = tempfile.mkdtemp(prefix="okf_ssh_")
+    key_path = os.path.join(temp_dir, "deploy_key")
+    known_hosts_path = os.path.join(temp_dir, "known_hosts")
+    repo_dir = os.path.join(temp_dir, "repo")
     content = ""
+
     try:
-        bucket = ensure_okf_bucket(OKF_BUCKET_NAME, PROJECT_ID, OKF_BUCKET_LOCATION)
-        blob = bucket.blob(OKF_FILENAME)
-        if blob.exists():
-            content = blob.download_as_text(encoding="utf-8")
-            logger.info(f"Fetched latest OKF dynamic context from gs://{OKF_BUCKET_NAME}/{OKF_FILENAME} ({len(content)} bytes).")
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(private_key_pem.strip() + "\n")
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        os.chmod(key_path, 0o600)
+
+        git_ssh_cmd = (
+            f"ssh -i {shlex.quote(key_path)} "
+            "-o IdentitiesOnly=yes "
+            "-o BatchMode=yes "
+            "-o StrictHostKeyChecking=accept-new "
+            f"-o UserKnownHostsFile={shlex.quote(known_hosts_path)} "
+            "-o ConnectTimeout=10 "
+            "-o LogLevel=ERROR"
+        )
+        env = os.environ.copy()
+        env["GIT_SSH_COMMAND"] = git_ssh_cmd
+        env["SSH_AUTH_SOCK"] = ""
+
+        target_url = repo_url or f"git@github.com:{repo_name}.git"
+        res = subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                branch,
+                "--single-branch",
+                target_url,
+                repo_dir,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=20,
+        )
+        if res.returncode == 0:
+            for fname in (OKF_FILENAME, OKF_FALLBACK_FILENAME):
+                fpath = os.path.join(repo_dir, fname)
+                if os.path.isfile(fpath):
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    logger.info(
+                        f"Fetched OKF dynamic context '{fname}' from {repo_name}@{branch} "
+                        f"via deploy key ({len(content)} bytes)."
+                    )
+                    break
+            else:
+                logger.info(
+                    f"Neither '{OKF_FILENAME}' nor '{OKF_FALLBACK_FILENAME}' exists on "
+                    f"{repo_name}@{branch}. Using baseline demeanor."
+                )
         else:
-            logger.info(f"OKF object gs://{OKF_BUCKET_NAME}/{OKF_FILENAME} does not exist yet. Using baseline demeanor.")
+            stderr_msg = (res.stderr or "").strip()
+            logger.warning(
+                f"Git SSH clone failed for {repo_name}@{branch} (rc={res.returncode}): {stderr_msg}"
+            )
     except Exception as e:
-        logger.warning(f"Unable to fetch dynamic OKF context from Cloud Storage bucket '{OKF_BUCKET_NAME}': {e}. Using empty/cached fallback.")
+        logger.warning(f"Error fetching OKF dynamic context via deploy key: {e}")
+    finally:
+        try:
+            if os.path.exists(key_path):
+                os.unlink(key_path)
+        except OSError:
+            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     return content
 
 
-def fetch_okf_via_git_ssh(private_key_pem: str = "", repo_name: str = REPO_NAME) -> str:
-    """Backward compatibility wrapper: redirects to Google Cloud Storage fetch."""
-    return _fetch_okf_from_remote()
+def _fetch_okf_from_remote() -> str:
+    """Fetches dynamic OKF rules from GitHub ('main' branch) using the Secret Manager SSH deploy key."""
+    deploy_key = get_secret(DEPLOY_KEY_SECRET_NAME)
+    if not deploy_key or is_placeholder_token(deploy_key) or "PRIVATE KEY" not in deploy_key:
+        logger.warning(
+            f"Valid SSH deploy key not found in Secret Manager secret '{DEPLOY_KEY_SECRET_NAME}'. "
+            "Using empty/baseline fallback."
+        )
+        return ""
+
+    return fetch_okf_via_git_ssh(deploy_key, REPO_NAME, branch=MAIN_BRANCH)
 
 
 def invalidate_okf_cache(refresh_immediately: bool = True) -> str:
@@ -208,7 +270,7 @@ def invalidate_okf_cache(refresh_immediately: bool = True) -> str:
 
 
 def fetch_okf_dynamic_context(force_refresh: bool = False) -> str:
-    """Fetches dynamic OKF rules from Cloud Storage bucket 'instructions91' with TTL cache and background refresh."""
+    """Fetches dynamic OKF rules from GitHub repository ('main' branch) with TTL cache and background refresh."""
     global _OKF_CACHE, _OKF_CACHE_INITIALIZED, _OKF_CACHE_REFRESHING
     cached_content, cached_time = _OKF_CACHE
     now = time.time()
@@ -259,7 +321,7 @@ def get_base_instructions() -> str:
 
 
 def dynamic_instruction_provider(context: Optional[CallbackContext] = None) -> str:
-    """Merges base AGENT.md instructions with dynamic OKF rules from Cloud Storage."""
+    """Merges base AGENT.md instructions with dynamic OKF rules from GitHub ('main' branch)."""
     base = get_base_instructions()
     dynamic_okf = fetch_okf_dynamic_context().strip()
 

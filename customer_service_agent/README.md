@@ -22,19 +22,18 @@ google-adk>=1.18.0
 google-cloud-bigquery>=3.46.0
 google-cloud-bigquery-storage>=2.42.0
 google-cloud-secret-manager>=2.31.0
-google-cloud-storage>=3.16.0
+google-genai>=1.0.0
 pyarrow>=25.0.0
-PyGithub>=2.10.0
 requests>=2.32.0
 pydantic>=2.10.0
 ```
 
-## 4. Self-Improving Dynamic Context (Google Cloud Storage OKF Integration)
-* **Storage Location:** Google Cloud Storage bucket `instructions91` (`US` multi-region).
-* **Target Object:** `dynamic_context.md`.
-* **Automatic Provisioning:** If the bucket `instructions91` does not exist on the first dynamic context load, the Customer Service Agent creates it automatically.
-* **Caching Strategy:** 2-minute (120-second) TTL in-memory cache with stale-while-revalidate background refresh to ensure ultra-low per-turn latency while quickly picking up newly saved rules from the Auditor Agent without agent restarts.
-* **Fallback Behavior:** Gracefully falls back to baseline operational policies if the storage bucket or object is empty or temporarily inaccessible.
+## 4. Self-Improving Dynamic Context (GitHub SSH OKF Integration)
+* **Source Repository & Branch:** `git@github.com:gshilo/experthub_context.git`, strictly read from the `main` branch (`git clone --depth 1 --branch main --single-branch`). Proposals pushed by the Auditor Agent to `new_version` are not active until merged to `main`.
+* **Authentication:** SSH deploy key retrieved dynamically from Google Cloud Secret Manager (`github-deploy-key`, overridable via `GITHUB_DEPLOY_KEY_SECRET_NAME`). The key is written to a temporary `0o600` file for the duration of the Git SSH fetch and always deleted in a `finally` block.
+* **Target File:** `dynamic_context.md` (with `dynamic_content.md` fallback).
+* **Caching Strategy:** 2-minute (120-second) TTL in-memory cache with stale-while-revalidate background refresh (`invalidate_okf_cache()` supported for immediate refresh) to ensure ultra-low per-turn latency while picking up newly merged rules without agent restarts.
+* **Fallback Behavior:** Gracefully returns an empty string and falls back to baseline operational policies if `dynamic_context.md` does not yet exist on `main` or if the remote fetch is temporarily unavailable.
 
 ## 5. Tools & Operational Policies
 * `register_customer_order(order_id, customer_name, product, category, issue, ...)`: Dynamically registers runtime-generated customer orders and arbitrary appliances into the in-memory order registry so support tools seamlessly resolve dynamically synthesized customer inquiries without order or catalog deadlocks.
