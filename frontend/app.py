@@ -91,7 +91,6 @@ try:
         generate_customer_persona,
         generate_customer_turn,
         evaluate_customer_experience,
-        write_customer_rating_to_alloydb,
         write_customer_rating_to_bigquery,
     )
 except Exception as e:
@@ -256,7 +255,7 @@ except Exception as e:
     def _procedural_fallback_persona(category_hint: str = "") -> Dict[str, Any]:
         return generate_customer_persona()
 
-    def write_customer_rating_to_alloydb(
+    def write_customer_rating_to_bigquery(
         customer_id: int,
         customer_name: str,
         rating: int,
@@ -265,10 +264,11 @@ except Exception as e:
         project_id: str = PROJECT_ID,
     ) -> bool:
         ts = timestamp or datetime.now(timezone.utc).isoformat()
-        logger.info(f"[Fallback] Recorded rating ({rating}/5) for {customer_name} at {ts}: {description}")
+        logger.info(
+            f"[Fallback] Recorded rating ({rating}/5) for {customer_name} at {ts} "
+            f"(BigQuery demo.customer_ratings): {description}"
+        )
         return True
-
-    write_customer_rating_to_bigquery = write_customer_rating_to_alloydb
 
     def generate_customer_turn(
         history: List[Dict[str, str]],
@@ -1587,7 +1587,7 @@ class SimulationSession:
 
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
-                write_customer_rating_to_alloydb(
+                write_customer_rating_to_bigquery(
                     customer_id=cust_id,
                     customer_name=cust_name,
                     rating=rating,
@@ -1596,7 +1596,7 @@ class SimulationSession:
                     project_id=PROJECT_ID,
                 )
             except Exception as db_err:
-                logger.warning(f"AlloyDB rating persistence note: {db_err}")
+                logger.warning(f"BigQuery demo.customer_ratings persistence note: {db_err}")
 
             self.emit(
                 "rating",
