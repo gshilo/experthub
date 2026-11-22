@@ -18,19 +18,21 @@ The Auditor operates with an **In-Database BigQuery AI Pushdown Architecture**:
 
 ---
 
-## 2. Dynamic Context Cloud Storage Interaction Protocol
-When interacting with the dynamic context file (`dynamic_context.md`) in Google Cloud Storage bucket `instructions91`, you MUST adhere strictly to the following rules:
+## 2. Dynamic Context GitHub Interaction Protocol
+When interacting with the dynamic context file (`dynamic_context.md`) in GitHub repository `gshilo/experthub_context`, you MUST adhere strictly to the following rules:
 
-1. **Bucket Management:**
-   * OKF rules are saved to and read from Google Cloud Storage bucket `instructions91`.
-   * If the bucket does not exist, create it automatically in multi-region `US`.
+1. **Authentication via Secret Manager Deploy Key:**
+   * Retrieve the SSH private deploy key dynamically from Google Cloud Secret Manager (`GITHUB_DEPLOY_KEY_SECRET_NAME`, default `github-deploy-key`).
+   * Write the key to a temporary file (`0o600`), authenticate Git over SSH (`git@github.com:gshilo/experthub_context.git`), and ALWAYS delete the temporary key file and temporary repository directory in a `finally` block.
+   * Never hardcode deploy keys, API keys, or tokens in source code.
 
-2. **Direct Overwrite with Rule Merging:**
-   * Read existing rules from `gs://instructions91/dynamic_context.md` if the object exists.
+2. **Branching & Rule Merging (`new_version` -> human review -> `main`):**
+   * Base `new_version` on `origin/new_version` if that remote branch exists; otherwise branch `new_version` from `origin/main` (creating an initial branch only if the repository is completely empty).
+   * Read existing rules from `dynamic_context.md` (with `dynamic_content.md` fallback if present) on the checked-out branch.
    * **Rule Retention:** Genuinely data-backed dynamic rules are retained intact. Known legacy static templates are automatically purged.
-   * **Semantic Additive Updates:** Add newly identified rules to the file. Deduplicate candidate policies and directives against existing rules using semantic token overlap, appending only genuinely new rules.
-   * Write the merged OKF rules directly back to `gs://instructions91/dynamic_context.md`.
-   * Live customer service interactions pull active dynamic context directly from `gs://instructions91/dynamic_context.md`.
+   * **Semantic Additive Updates:** Deduplicate candidate policies and directives against existing rules using semantic token overlap, appending only genuinely new rules.
+   * Write `dynamic_context.md`, commit, and push to `origin/new_version` (`workflow_state: AWAITING_HUMAN_REVIEW`).
+   * Live customer service interactions pull approved dynamic context exclusively from branch `main`.
 
 ---
 
@@ -116,8 +118,10 @@ The Auditor pipeline returns a structured JSON report:
 * `okf_rule_block`: The exact OKF Markdown text synchronized to GitHub.
 * `github_commit_status`: Confirmation of the GitHub commit SHA or status message.
 * `github_commit_success`: Boolean flag indicating whether the commit and push succeeded.
-* `target_branch`: Target branch name (`main` when initialized, `new_version` when updated).
-* `workflow_state`: Workflow lifecycle status (`CREATED_IN_MAIN` or `AWAITING_HUMAN_REVIEW_ON_NEW_VERSION`).
+* `target_branch`: Target branch name (`new_version`).
+* `repo`: Target GitHub repository (`gshilo/experthub_context`).
+* `workflow_state`: Workflow lifecycle status (`AWAITING_HUMAN_REVIEW`).
+* `okf_file`: Target OKF filename (`dynamic_context.md`).
 
 ---
 

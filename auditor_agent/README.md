@@ -16,10 +16,10 @@ The Auditor coordinates three specialized sub-agents with an **In-Database BigQu
    * Generates formal YAML + Markdown rules strictly conforming to the **Open Knowledge Format (OKF v0.2)** specification.
    * **100% Dynamic Rule Formulation:** Formulates rules dynamically based purely on current telemetry and customer feedback findings. Zero hardcoded rule templates.
    * **Legacy Rule Scrubbing & Deduplication:** Automatically purges any legacy static rules and deduplicates candidate rules using semantic token similarity.
-   * Saves rules directly to Google Cloud Storage bucket `instructions91` (`US` multi-region).
-   * **Direct Storage Rules:**
-     * If bucket `instructions91` is missing, creates it automatically.
-     * Merges newly generated rules into any existing `dynamic_context.md` in the bucket and saves directly to `gs://instructions91/dynamic_context.md`.
+   * Pushes updated rules over SSH to GitHub repository `gshilo/experthub_context` on branch `new_version` using the SSH deploy key stored in Secret Manager (`github-deploy-key`).
+   * **Branching & Merge Workflow:**
+     * Bases `new_version` on `origin/new_version` if it exists, otherwise creates `new_version` from `origin/main`.
+     * Merges newly generated rules into existing `dynamic_context.md` and pushes to `origin/new_version` (`AWAITING_HUMAN_REVIEW`) for review before merging into `main`.
 
 ## 3. Audit Report Output Schema
 Each invocation returns a structured report containing:
@@ -27,17 +27,19 @@ Each invocation returns a structured report containing:
 * `average_rating`: Mean score across analyzed sessions.
 * `token_recommendations`: Actionable prompt compression directives.
 * `estimated_token_savings`: Estimated percentage savings.
-* `okf_rule_block`: The exact OKF Markdown text saved to Cloud Storage.
-* `storage_sync_status`: Status message of the Cloud Storage update.
-* `storage_sync_success`: Boolean indicating whether the Cloud Storage sync succeeded.
-* `target_bucket`: Name of the GCS bucket (`instructions91`).
-* `object_path`: Full Cloud Storage object path (`gs://instructions91/dynamic_context.md`).
+* `okf_rule_block`: The exact OKF Markdown text pushed to GitHub.
+* `github_commit_status`: Status message including the GitHub commit SHA.
+* `github_commit_success`: Boolean indicating whether the GitHub commit and push succeeded.
+* `target_branch`: Target GitHub branch (`new_version`).
+* `repo`: Target GitHub repository (`gshilo/experthub_context`).
+* `workflow_state`: Workflow lifecycle state (`AWAITING_HUMAN_REVIEW`).
+* `okf_file`: Target OKF filename (`dynamic_context.md`).
 
 ## 4. Dependencies, Telemetry & Agent Engine Observability
 In order to enable logging, telemetry, and Observability settings in Vertex AI Agent Engine, ensure all agents are using:
 * `google-cloud-aiplatform[agent_engines]` ≥ v1.126.1
 * `google-adk` ≥ v1.18.0
-* Deployment configured with `--otel_to_cloud` and runtime environment variables `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true` and `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false`.
+* Deployment configured with `--otel_to_cloud` and runtime environment variables `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true`, `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false`, and `GITHUB_DEPLOY_KEY_SECRET_NAME=github-deploy-key`.
 
 These library versions provide OpenTelemetry tracing, Cloud Trace export, structured log streaming, and telemetry capture within the Vertex AI Agent Engine runtime. Dependencies are defined in `requirements.txt`:
 ```text
@@ -46,11 +48,10 @@ google-adk>=1.18.0
 google-cloud-bigquery>=3.46.0
 google-cloud-bigquery-storage>=2.42.0
 google-cloud-secret-manager>=2.31.0
-google-cloud-storage>=3.16.0
 pyarrow>=25.0.0
-PyGithub>=2.10.0
 requests>=2.32.0
 pydantic>=2.10.0
+google-genai>=1.0.0
 ```
 
 ## 5. Deployment to Vertex AI Agent Engine
@@ -64,16 +65,14 @@ python auditor_agent/deploy.py --dry-run
 python auditor_agent/deploy.py --project=experthub-510907 --region=us-central1 --otel_to_cloud
 ```
 
-## 6. GitHub PAT Configuration in Secret Manager
-To enable the Auditor Agent to push generated OKF rules directly to GitHub:
-1. Generate a GitHub Personal Access Token:
-   * **Classic PAT:** Select `repo` scope (Full control of private repositories).
-   * **Fine-Grained PAT:** Select target repository `gshilo/experthub_context` with **Contents: Read and Write** permissions.
-2. Add the token to Google Cloud Secret Manager (version update):
+## 6. GitHub SSH Deploy Key Configuration in Secret Manager
+To enable the Auditor Agent to push generated OKF rules to GitHub over SSH:
+1. Generate an Ed25519 SSH deploy keypair and add the public key to `https://github.com/gshilo/experthub_context/settings/keys` with **Allow write access** enabled.
+2. Store the private key in Google Cloud Secret Manager under secret name `github-deploy-key` (overrideable via `GITHUB_DEPLOY_KEY_SECRET_NAME`):
    ```bash
-   echo -n "ghp_YOUR_TOKEN" | gcloud secrets versions add github-pat --data-file=-
+   gcloud secrets versions add github-deploy-key --data-file=/path/to/id_ed25519
    ```
-3. If the secret contains the initial deployment placeholder (`PLACEHOLDER_GITHUB_PAT`), the Auditor Agent safely validates rules locally and provides explicit instructions in the UI without throwing unhandled exceptions.
+3. If the secret is missing or contains a placeholder value, the Auditor Agent safely returns the generated OKF rules with an actionable error message without leaking any temporary key files.
 
 ## 7. BigQuery AI & Generative AI Functions Skill
 The Auditor Agent includes the **BigQuery AI & Generative AI Functions** skill:
