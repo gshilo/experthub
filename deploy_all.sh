@@ -23,15 +23,13 @@ export REGION="us-central1"
 export BQ_LOCATION="US"
 export ALLOYDB_PASSWORD="ChangeMeAlloyDB123!"
 export GEMINI_API_KEY="AIzaSy..."
-export GITHUB_PAT="ghp_..."
+export GITHUB_DEPLOY_KEY_FILE="${HOME}/.ssh/experthub_deploy_key"
 
 export ALLOYDB_CLUSTER="apex"
 export ALLOYDB_INSTANCE="apex"
 export ALLOYDB_DATABASE="apex"
 export ARTIFACT_REPO="experthub-repo"
 export FRONTEND_SERVICE="experthub-frontend"
-export OKF_BUCKET_NAME="instructions91"
-export OKF_BUCKET_LOCATION="US"
 
 
 # ==============================================================================
@@ -99,35 +97,23 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" --member="serviceAccount:
 # STEP 4: Create Cloud Secret Manager Secrets
 # ==============================================================================
 
-# Create Gemini API Key secret
-echo -n "${GEMINI_API_KEY}" | gcloud secrets create gemini-api-key --data-file=- --replication-policy="automatic" --project="${PROJECT_ID}"
+# Create Gemini API Key secret (if not already created)
+gcloud secrets describe gemini-api-key --project="${PROJECT_ID}" >/dev/null 2>&1 || \
+  echo -n "${GEMINI_API_KEY}" | gcloud secrets create gemini-api-key --data-file=- --replication-policy="automatic" --project="${PROJECT_ID}"
 
-# Create GitHub Personal Access Token secret
-echo -n "${GITHUB_PAT}" | gcloud secrets create github-pat --data-file=- --replication-policy="automatic" --project="${PROJECT_ID}"
+# Create GitHub SSH Deploy Key secret (used for gshilo/experthub_context OKF sync)
+# Ensure ${GITHUB_DEPLOY_KEY_FILE} points to your private ed25519 deploy key and its
+# public key is added with write access in GitHub Repo Settings -> Deploy keys.
+if ! gcloud secrets describe github-deploy-key --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  gcloud secrets create github-deploy-key --data-file="${GITHUB_DEPLOY_KEY_FILE}" --replication-policy="automatic" --project="${PROJECT_ID}"
+else
+  echo "Secret 'github-deploy-key' already exists in project ${PROJECT_ID}."
+fi
 
-# Grant access on secrets to Compute Service Account
+# Grant access on secrets to Compute and Reasoning Engine Service Accounts
 gcloud secrets add-iam-policy-binding gemini-api-key --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
-gcloud secrets add-iam-policy-binding github-pat --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
-
-
-# ==============================================================================
-# STEP 4B: Create Google Cloud Storage Bucket for OKF Dynamic Context
-# ==============================================================================
-
-# Create Google Cloud Storage bucket for dynamic_context.md in location US
-gcloud storage buckets create "gs://${OKF_BUCKET_NAME}" \
-  --project="${PROJECT_ID}" \
-  --location="${OKF_BUCKET_LOCATION}" \
-  --uniform-bucket-level-access 2>/dev/null || echo "Bucket gs://${OKF_BUCKET_NAME} already exists."
-
-# Ensure Compute and Reasoning Engine service accounts have objectAdmin permissions on the bucket
-gcloud storage buckets add-iam-policy-binding "gs://${OKF_BUCKET_NAME}" \
-  --member="serviceAccount:${COMPUTE_SA}" \
-  --role="roles/storage.objectAdmin"
-
-gcloud storage buckets add-iam-policy-binding "gs://${OKF_BUCKET_NAME}" \
-  --member="serviceAccount:${RE_SA}" \
-  --role="roles/storage.objectAdmin"
+gcloud secrets add-iam-policy-binding github-deploy-key --member="serviceAccount:${COMPUTE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
+gcloud secrets add-iam-policy-binding github-deploy-key --member="serviceAccount:${RE_SA}" --role="roles/secretmanager.secretAccessor" --project="${PROJECT_ID}"
 
 
 # ==============================================================================
@@ -253,7 +239,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
   --cpu=1 \
   --memory=512Mi \
   --timeout=300s \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},OKF_BUCKET_NAME=${OKF_BUCKET_NAME},OKF_BUCKET_LOCATION=${OKF_BUCKET_LOCATION},GITHUB_SECRET_NAME=github-pat"
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},BQ_LOCATION=${BQ_LOCATION},GITHUB_DEPLOY_KEY_SECRET_NAME=github-deploy-key"
 
 # Retrieve and print the deployed web application URL
 gcloud run services describe "${FRONTEND_SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" --format="value(status.url)"

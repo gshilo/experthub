@@ -29,8 +29,8 @@ ExpertHub is a closed-loop, self-improving multi-agent system built on the **Goo
                                    │
                                    ▼
          ┌─────────────────────────────────────────────────────┐
-         │ Dynamic OKF Rules in Cloud Storage (instructions91) │
-         │               (dynamic_context.md)                  │
+         │  Dynamic OKF Rules in GitHub (experthub_context)    │
+         │        (dynamic_context.md: new_version -> main)    │
          └─────────────────────────────────────────────────────┘
 ```
 
@@ -53,6 +53,7 @@ In accordance with Google Cloud enterprise security best practices:
 | :--- | :--- | :--- | :--- |
 | `gemini-api-key` | `latest` (v1) | Gemini API Key for model inference (`gemini-3.8-flash`) | Customer Service, Customer, Auditor, Frontend |
 | `google-api-key` | `latest` (v1) | Compatibility alias for Google GenAI SDK | Customer Service, Customer, Auditor, Frontend |
+| `github-deploy-key` | `latest` | SSH deploy key for `gshilo/experthub_context` OKF sync | Customer Service, Auditor, Frontend, Reset CLI |
 
 ### Dynamic Runtime Key Resolution (`ensure_gemini_api_key`)
 At application and agent startup, each component invokes `ensure_gemini_api_key(project_id)`:
@@ -63,21 +64,19 @@ At application and agent startup, each component invokes `ensure_gemini_api_key(
 
 ---
 
-## 3. Dynamic Context & Google Cloud Storage Lifecycle
+## 3. Dynamic Context & GitHub Lifecycle
 
-The system self-improves by maintaining an Open Knowledge Format (OKF v0.2) document (`dynamic_context.md`) in Google Cloud Storage bucket `instructions91` (`US` multi-region).
+The system self-improves by maintaining an Open Knowledge Format (OKF v0.2) document (`dynamic_context.md`) in GitHub repository `https://github.com/gshilo/experthub_context.git`, authenticated over SSH via Google Cloud Secret Manager (`github-deploy-key`).
 
-### Storage & Dynamic Loading Protocol:
-1. **Bucket Creation on First Load:**
-   * If the bucket `instructions91` does not exist on the Customer Service Agent's first dynamic context load, it is created automatically.
-   * If the Auditor Agent runs before the Customer Service Agent has initialized the bucket, the Auditor Agent also creates it automatically.
-2. **Direct Overwrite with Rule Merging:**
-   * The Auditor Agent reads existing OKF rules from `gs://instructions91/dynamic_context.md` (if present).
-   * Formulates new operational rules based on BigQuery feedback and telemetry analysis, deduplicating candidate rules against existing policies.
-   * Merges and appends newly formulated policies and directives directly into `gs://instructions91/dynamic_context.md`.
-3. **Live Context Consumption:**
-   * The Customer Service Agent retrieves dynamic directives from `gs://instructions91/dynamic_context.md` with TTL caching.
-   * When dynamic rules are present, they supersede baseline friction and gatekeeping. If the file is not yet populated, the agent uses its baseline demeanor.
+### Branching & Dynamic Loading Protocol:
+1. **Auditor Rule Authoring (`new_version` branch):**
+   * The Auditor Agent clones `gshilo/experthub_context` using the `github-deploy-key` secret from Secret Manager.
+   * Reads existing OKF rules from `dynamic_context.md` (if present), deduplicates newly formulated policies and directives, and commits/pushes the updated file to branch `new_version` awaiting human review.
+2. **Human Review & Promotion (`new_version` -> `main`):**
+   * An operator reviews the proposed OKF rule changes on `new_version` and merges them into `main`.
+3. **Live Context Consumption (`main` branch):**
+   * The Customer Service Agent retrieves `dynamic_context.md` from branch `main` of `gshilo/experthub_context` (using `github-deploy-key` from Secret Manager with TTL caching).
+   * When dynamic rules are present on `main`, they supersede baseline friction and gatekeeping. If the file is not yet populated on `main`, the agent uses its baseline demeanor.
 
 ---
 
@@ -98,7 +97,6 @@ All agents and services adhere to the following dependency and telemetry baselin
 * `google-genai` ≥ `1.0.0`
 * `google-cloud-secret-manager` ≥ `2.31.0`
 * `google-cloud-bigquery` ≥ `3.46.0`
-* `google-cloud-storage` ≥ `3.16.0`
 * Telemetry enabled via `--otel_to_cloud`, exporting traces, spans, and metrics to Google Cloud Trace, BigQuery, and Vertex AI Agent Engine Observability.
 
 ---

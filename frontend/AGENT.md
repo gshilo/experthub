@@ -35,8 +35,8 @@ Triggers and reports status of the 2-slot background dialog pre-warming pool (`P
 ### Tab 1: Live Conversation & Auditor Workspace
 * **Start conversation:** Pops a pre-warmed dialog slot (`< 50ms` response time), renders the customer's opening message (Turn 1) in `~0.3s` and the pre-warmed Customer Service reply (Turn 2) in `~1.5s`, and streams Turn 3+ live while overlapping LLM generation with the current turn's typing animation. Displays animated typing indicators while agents formulate replies.
 * **End conversation:** Triggers immediate graceful abortion, prompting the customer agent to evaluate the interaction up to that point and persist its rating to BigQuery `demo.customer_ratings`.
-* **Show instructions:** Queries `/api/agent/instructions` to retrieve the Customer Service Agent's full system prompt—including dynamic OKF rules loaded from `dynamic_context.md` in Google Cloud Storage bucket `instructions91` and behavioral style constraints—and renders them in an interactive modal with copy functionality and status badges, as well as an inline viewer.
-* **Run Auditor Agent:** Calls the Auditor pipeline on demand, displays detected policy/latency issues, token optimization metrics, and synchronizes rules directly with Google Cloud Storage: persists merged OKF rules to `gs://instructions91/dynamic_context.md` (creating the bucket if missing) without requiring GitHub branches or versioning. Displays bucket badge and synchronization status.
+* **Show instructions:** Queries `/api/agent/instructions` to retrieve the Customer Service Agent's full system prompt—including dynamic OKF rules loaded from `dynamic_context.md` on the `main` branch of GitHub repository `gshilo/experthub_context` (authenticated via Secret Manager `github-deploy-key`) and behavioral style constraints—and renders them in an interactive modal with copy functionality and status badges, as well as an inline viewer.
+* **Run Auditor Agent:** Calls the Auditor pipeline on demand, displays detected policy/latency issues, token optimization metrics, and synchronizes merged OKF rules to `dynamic_context.md` on the `new_version` branch of `gshilo/experthub_context` via Git over SSH using the `github-deploy-key` secret from Secret Manager (awaiting human review before merging to `main`). Displays branch badge (`new_version` / `main`), review status, and GitHub synchronization status.
 
 ### Tab 2: Telemetry & Analytics Dashboard
 * **CSAT Distribution:** Bar chart showing 1 to 5 star rating counts.
@@ -73,7 +73,8 @@ These library standards provide comprehensive Cloud Logging capture, OpenTelemet
 
 ## 5. Model Authentication & Secret Manager Key Management
 * **Gemini Model Authentication:** The frontend and its coordinated agents dynamically load the Gemini API key from Google Cloud Secret Manager (`gemini-api-key` / `google-api-key`) via `ensure_gemini_api_key()`.
-* **Zero-Hardcoding Policy:** The application does not store API keys in plaintext or hardcode them in Dockerfiles or Cloud Run environment variables.
+* **GitHub Context Sync Authentication:** Both the Customer Service Agent (reading `main`) and Auditor Agent (pushing to `new_version`) authenticate to `gshilo/experthub_context` over SSH using the deploy key stored in Google Cloud Secret Manager (`github-deploy-key`, configured via `GITHUB_DEPLOY_KEY_SECRET_NAME`).
+* **Zero-Hardcoding Policy:** The application does not store API keys or SSH deploy keys in plaintext or hardcode them in Dockerfiles or Cloud Run environment variables.
 * **Seamless Runtime Resolution:** On startup, `ensure_gemini_api_key()` populates `os.environ["GEMINI_API_KEY"]` and `os.environ["GOOGLE_API_KEY"]` dynamically, completely eliminating `ValueError: No API key was provided` across local and Cloud Run environments.
 
 ---
@@ -93,7 +94,7 @@ These library standards provide comprehensive Cloud Logging capture, OpenTelemet
       --region us-central1 \
       --project experthub-510907 \
       --allow-unauthenticated \
-      --set-env-vars GOOGLE_CLOUD_PROJECT=experthub-510907,GCP_REGION=us-central1,CUSTOMER_SERVICE_AGENT_ID=2556039354015285248,CUSTOMER_AGENT_ID=8810413336526061568,AUDITOR_AGENT_ID=4360856904684011520
+      --set-env-vars GOOGLE_CLOUD_PROJECT=experthub-510907,GCP_REGION=us-central1,GITHUB_DEPLOY_KEY_SECRET_NAME=github-deploy-key,CUSTOMER_SERVICE_AGENT_ID=2556039354015285248,CUSTOMER_AGENT_ID=8810413336526061568,AUDITOR_AGENT_ID=4360856904684011520
   ```
 
 

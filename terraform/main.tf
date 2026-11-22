@@ -16,7 +16,7 @@ locals {
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
     "iam.googleapis.com",
-    "storage.googleapis.com"
+    "storage.googleapis.com" # Required by `adk deploy agent_engine` staging (not used for OKF context storage)
   ]
 }
 
@@ -57,7 +57,7 @@ locals {
     "roles/dns.peer",
     "roles/serviceusage.serviceUsageConsumer",
     "roles/run.invoker",
-    "roles/storage.admin",
+    "roles/storage.admin", # Required for `adk deploy agent_engine` staging buckets (not an OKF bucket)
     "roles/artifactregistry.writer",
     "roles/logging.logWriter"
   ]
@@ -91,7 +91,7 @@ locals {
     "roles/secretmanager.secretAccessor",
     "roles/alloydb.client",
     "roles/alloydb.databaseUser",
-    "roles/storage.objectAdmin",
+    "roles/storage.objectAdmin", # Required for `adk deploy agent_engine` staging artifacts (not an OKF bucket)
     "roles/compute.networkAdmin",
     "roles/dns.peer",
     "roles/serviceusage.serviceUsageConsumer"
@@ -390,7 +390,7 @@ resource "null_resource" "deploy_customer_service_agent" {
 
   depends_on = [
     google_project_service.apis,
-    google_secret_manager_secret.github_pat,
+    google_secret_manager_secret.github_deploy_key,
     google_bigquery_dataset.agent_telemetry,
     null_resource.prepare_agent_venv
   ]
@@ -440,7 +440,7 @@ resource "null_resource" "deploy_auditor_agent" {
 
   depends_on = [
     google_project_service.apis,
-    google_secret_manager_secret.github_pat,
+    google_secret_manager_secret.github_deploy_key,
     google_bigquery_dataset.agent_telemetry,
     google_bigquery_table.customer_ratings,
     null_resource.prepare_agent_venv
@@ -493,8 +493,8 @@ resource "google_cloud_run_v2_service" "frontend" {
         value = var.bq_location
       }
       env {
-        name  = "GITHUB_SECRET_NAME"
-        value = var.secret_name
+        name  = "GITHUB_DEPLOY_KEY_SECRET_NAME"
+        value = "github-deploy-key"
       }
       env {
         name  = "CUSTOMER_SERVICE_AGENT_ID"

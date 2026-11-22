@@ -21,7 +21,7 @@ flowchart TD
         end
 
         subgraph Storage_Config["Storage & Secrets"]
-            SecMgr["Cloud Secret Manager<br/>(github-pat)"]
+            SecMgr["Cloud Secret Manager<br/>(github-deploy-key, gemini-api-key)"]
             AR["Artifact Registry<br/>(cloud-run-source-deploy)"]
         end
 
@@ -64,7 +64,7 @@ flowchart TD
    - Artifact Registry (`artifactregistry.googleapis.com`)
    - Resource Manager (`cloudresourcemanager.googleapis.com`)
    - Cloud IAM (`iam.googleapis.com`)
-   - Cloud Storage (`storage.googleapis.com`)
+   - Cloud Storage (`storage.googleapis.com`, used for `adk deploy agent_engine` staging buckets only)
 2. **Service Account & IAM (`google_project_iam_member`):**
    - Configures least-privilege roles for runtime workloads:
      - `roles/secretmanager.secretAccessor`
@@ -73,7 +73,8 @@ flowchart TD
      - `roles/aiplatform.user`
      - `roles/run.invoker`
 3. **Secret Manager (`google_secret_manager_secret`):**
-   - `github-pat`: Stores GitHub Personal Access Token for automated Open Knowledge Format (OKF) dynamic context authoring and commits.
+   - `github-deploy-key`: Stores the GitHub SSH deploy key for Open Knowledge Format (OKF) dynamic context sync with `gshilo/experthub_context` (`new_version` branch for Auditor Agent, `main` branch for Customer Service Agent).
+   - `gemini-api-key`: Stores the Gemini API key for model inference.
    - Secret access IAM policy binding for the compute workload.
 4. **BigQuery Engine (`google_bigquery_dataset`, `google_bigquery_table`):**
    - Dataset `agent_telemetry`: Populated by ADK 2.0 `BigQueryAgentAnalyticsPlugin` with token counts, latencies, and tool calls.

@@ -237,14 +237,14 @@ Execute these steps sequentially without stopping until the entire system is bui
 To ensure the conversation stream never freezes on the frontend:
 
 ### 1. Root Cause Analysis of Previous Freeze
-* **Dependency Gap:** `google-cloud-storage` was omitted from `frontend/requirements.txt`, which caused an `ImportError` when importing `customer_service_agent.agent` inside the Cloud Run container.
+* **Dependency Gap:** Missing runtime packages in `frontend/requirements.txt` previously caused an `ImportError` when importing `customer_service_agent.agent` inside the Cloud Run container.
 * **Silent Thread Failure:** The background simulation thread crashed with `NameError: name 'fetch_okf_dynamic_context' is not defined` because the import had failed silently, leaving `is_finished = False` and sending no further events to the queue.
 * **Early Substring Break:** Premature termination conditions broke the conversation after turn 1 if substrings like `"Delivered"` were present.
 * **Single SSE Reliance:** If an SSE connection was delayed, closed, or buffered by a reverse proxy, the client had no fallback polling mechanism.
 
 ### 2. Architectural Guardrails Implemented
 1. **Dependency Parity:**
-   * `google-cloud-storage>=3.16.0` is explicitly pinned in `frontend/requirements.txt`, matching all agent component specifications.
+   * `google-cloud-secret-manager>=2.31.0` and `git` + `openssh-client` (for GitHub `gshilo/experthub_context` OKF sync via `github-deploy-key`) are explicitly pinned in `frontend/requirements.txt` and `Dockerfile`.
 2. **In-File Resilient Fallbacks:**
    * `frontend/app.py` defines robust local fallbacks for all agent functions (`generate_customer_persona`, `write_customer_rating_to_bigquery`, `fetch_okf_dynamic_context`, `check_order_status`, `lookup_warranty_policy`, `initiate_return`, `search_product_catalog`, `run_audit_pipeline`) so module import failures can never cause a `NameError` or crash.
 3. **Guaranteed Thread Completion & Error Trapping:**
@@ -271,10 +271,7 @@ To push self-improving Open Knowledge Format (OKF v0.2) rules to GitHub without 
 
 ### 2. Key Pair & Secret Provisioning
 * **Key Algorithm:** `ed25519` key pair generated with comment `experthub-auditor-deploy-key`.
-* **Public Key:**
-  ```text
-  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIuAUjaTWaFizhIgxqp9HbnqRIRmaLVct+ZTXZY/a2ir experthub-auditor-deploy-key
-  ```
+* **Public Key:** Stored in GitHub repository settings under Deploy keys with write access (never hardcoded in source files).
 * **Secret Manager Secret:** `github-deploy-key` in GCP project `experthub-510907`.
 * **IAM Binding:** Service account `537563976049-compute@developer.gserviceaccount.com` has `roles/secretmanager.secretAccessor`.
 
