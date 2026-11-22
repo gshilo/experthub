@@ -25,9 +25,9 @@ flowchart TD
     end
 
     subgraph Knowledge["Open Knowledge Format (OKF) & Security"]
-        GCSBucket["Cloud Storage Bucket<br/>(instructions91)"]
+        GitHubRepo["GitHub Repo<br/>(gshilo/experthub_context)"]
         OKFFile["dynamic_context.md<br/>(OKF v0.2 Rules)"]
-        SecretMgr["Cloud Secret Manager<br/>(gemini-api-key)"]
+        SecretMgr["Cloud Secret Manager<br/>(gemini-api-key, github-deploy-key)"]
     end
 
     CloudRun <-->|"Orchestrates Turns (2-5s Delay)"| CustAgent
@@ -77,12 +77,12 @@ flowchart TD
      * *Telemetry & Feedback Analyzer Sub-Agent:* Detects real customer complaints (restocking fee surprises, delivery trace delays, repetitive diagnostics).
      * *Token Efficiency Optimizer Sub-Agent:* Devises prompt and completion token compression directives (-32% savings) focused on consolidating multi-turn diagnostics and disclosing return conditions upfront.
      * *OKF Rule Author Sub-Agent:* Formulates valid **Open Knowledge Format (OKF v0.2)** directives.
-4. **Self-Improving Dynamic Context Update & Storage Lifecycle:**
-   * The Auditor persists rules to Google Cloud Storage bucket `instructions91` (`US` multi-region):
-     * **Bucket Auto-Provisioning:** If bucket `instructions91` does not exist, it is created automatically.
-     * **Direct Rule Merging:** The Auditor reads existing rules from `gs://instructions91/dynamic_context.md`, appends newly formulated policies and directives, and saves the file directly.
+4. **Self-Improving Dynamic Context Update & GitHub Lifecycle:**
+   * The Auditor persists rules to GitHub repository `gshilo/experthub_context` over SSH using the deploy key stored in Secret Manager (`github-deploy-key`):
+     * **Branch Isolation (`new_version`):** The Auditor reads existing rules from `dynamic_context.md`, appends newly formulated policies and directives, and commits/pushes to branch `new_version` awaiting human review.
+     * **Human Review & Merge Gate:** After human review, changes on `new_version` are merged into `main`.
 5. **Immediate Dynamic Injection:**
-   * On subsequent conversation turns, the Customer Service Agent retrieves `dynamic_context.md` from `gs://instructions91` (via TTL caching) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
+   * On subsequent conversation turns, the Customer Service Agent retrieves `dynamic_context.md` from branch `main` of `gshilo/experthub_context` (via Secret Manager `github-deploy-key` and TTL caching) and merges the rules into its system prompt, preventing repeat mistakes and conserving tokens without requiring redeployment.
 6. **Analytics Dashboard:**
    * The user navigates to **Tab 2** (Visualization & Telemetry Analytics Dashboard) to observe real-time CSAT distributions (1 to 5 stars), response latency trends over time, token consumption over time (prompt, completion, and total tokens), tool usage breakdowns, and turn-by-turn token consumption.
 
@@ -183,7 +183,7 @@ google-adk>=1.18.0
 ### Step-by-Step Student CLI Deployment (`deploy_all.sh`)
 The [`deploy_all.sh`](file:///home/admin_gshilo_altostrat_com/experthub/deploy_all.sh) file is organized as a flat, sequential guide designed for students to copy and paste one command at a time directly into Google Cloud Shell (or terminal), without loops or subshells:
 
-1. **Set Environment Variables:** Export `PROJECT_ID`, `REGION`, `ALLOYDB_PASSWORD`, `GEMINI_API_KEY`, `GITHUB_PAT`.
+1. **Set Environment Variables:** Export `PROJECT_ID`, `REGION`, `ALLOYDB_PASSWORD`, `GEMINI_API_KEY`, `GITHUB_DEPLOY_KEY_FILE`.
 2. **Enable APIs & IAM:** Run `gcloud services enable` and individual role bindings.
 3. **Provision Secrets & AlloyDB:** Create Secret Manager secrets, AlloyDB cluster, instance, and database.
 4. **Setup BigQuery:** Create datasets, Vertex AI & AlloyDB connections, and federated views.
@@ -319,14 +319,13 @@ python3 reset_demo_state.py -y
 # Reset ONLY BigQuery tables
 python3 reset_demo_state.py --bq-only -y
 
-# Reset ONLY Cloud Storage OKF dynamic context
-python3 reset_demo_state.py --storage-only -y
+# Reset ONLY GitHub OKF dynamic context branches (new_version and main)
+python3 reset_demo_state.py --git-only -y
 ```
 
 This utility supports:
 1. **BigQuery Truncation (`--bq-only` or default):** Truncates BigQuery tables `demo.customer_ratings` and `agent_telemetry.agent_events` (preserving schema, clustering, and partitioning).
-2. **Cloud Storage Context Reset (`--storage-only` or default):** Deletes `dynamic_context.md` from Google Cloud Storage bucket `instructions91` to restore the agent to baseline demeanor.
-3. **Legacy Git Context Reset (`--git-only`):** Optional flag to clear legacy Git repository context branches.
+2. **GitHub Context Reset (`--git-only` or default):** Uses Secret Manager `github-deploy-key` to clear `dynamic_context.md` from branch `new_version` in `gshilo/experthub_context`, merge into `main`, and push both branches to restore the agent to baseline demeanor.
 
 
 

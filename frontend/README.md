@@ -36,7 +36,6 @@ google-cloud-bigquery-storage>=2.42.0
 google-cloud-secret-manager>=2.31.0
 pyarrow>=25.0.0
 requests>=2.32.0
-PyGithub>=2.10.0
 pydantic>=2.10.0
 ```
 

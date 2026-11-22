@@ -21,6 +21,11 @@ output "customer_ratings_table" {
   value       = "${google_bigquery_dataset.demo.dataset_id}.${google_bigquery_table.customer_ratings.table_id}"
 }
 
+output "secret_manager_github_deploy_key" {
+  description = "Secret Manager secret name for GitHub SSH Deploy Key."
+  value       = google_secret_manager_secret.github_deploy_key.name
+}
+
 output "secret_manager_github_pat" {
   description = "Secret Manager secret name for GitHub Personal Access Token."
   value       = google_secret_manager_secret.github_pat.name
