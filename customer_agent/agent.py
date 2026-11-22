@@ -3,7 +3,7 @@
 Built with Google Agent Development Kit (ADK 2.0), powered by Gemini 3.8 Flash (gemini-3.8-flash).
 Generates live, highly varied customer personas, issues, and multi-turn human dialogues
 on every conversation trigger, with realistic human pacing and automated post-conversation
-feedback persistence to AlloyDB (cluster 'apex', database 'apex', table 'customer_ratings').
+feedback persistence to BigQuery (dataset 'demo', table 'customer_ratings').
 """
 
 from __future__ import annotations
@@ -15,15 +15,13 @@ import os
 import random
 import re
 import time
-import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
 import google.auth
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App
-from google.cloud.alloydb.connector import Connector, IPTypes
-from google.cloud import secretmanager
+from google.cloud import bigquery, secretmanager
 from google import genai
 from google.genai import types
 
@@ -45,18 +43,15 @@ def _resolve_project_id() -> str:
 
 
 PROJECT_ID = _resolve_project_id()
-ALLOYDB_REGION = os.environ.get("ALLOYDB_REGION") or os.environ.get("GCP_REGION") or "us-central1"
-ALLOYDB_CLUSTER = os.environ.get("ALLOYDB_CLUSTER", "apex")
-ALLOYDB_INSTANCE = os.environ.get("ALLOYDB_INSTANCE", "apex")
-ALLOYDB_DATABASE = os.environ.get("ALLOYDB_DATABASE", "apex")
+DATASET_ID = "demo"
+DATASET_LOCATION = "US"
 TABLE_ID = "customer_ratings"
 MODEL_NAME = "gemini-3.8-flash"
 
 
 _SECRET_CACHE: Dict[str, str] = {}
 _GENAI_CLIENT: Optional[genai.Client] = None
-_ALLOYDB_CONNECTOR: Optional[Connector] = None
-_ALLOYDB_TABLE_VERIFIED: bool = False
+_BQ_TABLE_VERIFIED: bool = False
 
 
 def get_secret(secret_id: str, project: str = PROJECT_ID) -> str:
@@ -138,210 +133,146 @@ def _get_genai_client() -> genai.Client:
 ensure_gemini_api_key(PROJECT_ID)
 
 
-def _get_alloydb_connector() -> Connector:
-    """Returns a cached AlloyDB Python Connector instance."""
-    global _ALLOYDB_CONNECTOR
-    if _ALLOYDB_CONNECTOR is None:
-        _ALLOYDB_CONNECTOR = Connector(refresh_strategy="lazy", enable_iam_auth=True)
-    return _ALLOYDB_CONNECTOR
+def _normalize_bq_datetime(timestamp: Optional[str] = None) -> str:
+    """Formats a timestamp as naive UTC 'YYYY-MM-DD HH:MM:SS' for BigQuery DATETIME columns.
 
-
-def _get_alloydb_iam_user() -> str:
-    """Resolves the AlloyDB IAM database username from the active service account."""
-    explicit_user = os.environ.get("ALLOYDB_IAM_USER")
-    if explicit_user:
-        return explicit_user.strip()
-
-    email = ""
-    try:
-        credentials, _ = google.auth.default()
-        email = getattr(credentials, "service_account_email", "") or ""
-    except Exception:
-        pass
-
-    if not email or email == "default":
+    BigQuery DATETIME columns reject timezone suffixes ('Z', '+00:00', offsets).
+    If timestamp is None or unparseable, defaults to current UTC time.
+    """
+    if timestamp is not None and str(timestamp).strip():
+        raw = str(timestamp).strip()
         try:
-            req = urllib.request.Request(
-                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
-                headers={"Metadata-Flavor": "Google"},
-            )
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                email = resp.read().decode("utf-8").strip()
-        except Exception:
+            iso_candidate = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+            dt = datetime.datetime.fromisoformat(iso_candidate)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(datetime.timezone.utc)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
             pass
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    if email and email.endswith(".gserviceaccount.com"):
-        return email[: -len(".gserviceaccount.com")]
-    if email:
-        return email
 
-    try:
-        req = urllib.request.Request(
-            "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id",
-            headers={"Metadata-Flavor": "Google"},
+def ensure_bigquery_ratings_table(project_id: str = PROJECT_ID) -> None:
+    """Ensures BigQuery dataset 'demo' (location US) and table 'demo.customer_ratings' exist."""
+    global _BQ_TABLE_VERIFIED
+    target_project = (project_id or PROJECT_ID or "").strip()
+    if not target_project:
+        logger.warning(
+            "Skipping BigQuery ratings table verification: no GCP project ID configured."
         )
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            project_num = resp.read().decode("utf-8").strip()
-            if project_num:
-                return f"{project_num}-compute@developer"
-    except Exception:
-        pass
-    return "postgres"
+        return
 
-
-def _connect_alloydb(
-    db_name: str = ALLOYDB_DATABASE,
-    project_id: str = PROJECT_ID,
-):
-    """Creates a pg8000 DB-API connection to AlloyDB via PSC and IAM Database Authentication."""
-    instance_uri = (
-        f"projects/{project_id}/locations/{ALLOYDB_REGION}/"
-        f"clusters/{ALLOYDB_CLUSTER}/instances/{ALLOYDB_INSTANCE}"
-    )
-    iam_user = _get_alloydb_iam_user()
-    connector = _get_alloydb_connector()
-    ip_type_str = os.environ.get("ALLOYDB_IP_TYPE", "PSC").upper()
-    ip_type = getattr(IPTypes, ip_type_str, IPTypes.PSC)
-    return connector.connect(
-        instance_uri,
-        "pg8000",
-        user=iam_user,
-        db=db_name,
-        enable_iam_auth=True,
-        ip_type=ip_type,
-    )
-
-
-def ensure_alloydb_ratings_table(project_id: str = PROJECT_ID) -> None:
-    """Verifies or creates AlloyDB database 'apex' and table 'customer_ratings' with identical schema."""
-    global _ALLOYDB_TABLE_VERIFIED
     try:
-        try:
-            conn = _connect_alloydb(db_name=ALLOYDB_DATABASE, project_id=project_id)
-        except Exception as db_err:
-            err_str = str(db_err)
-            if "3D000" in err_str or f'database "{ALLOYDB_DATABASE}" does not exist' in err_str.lower():
-                logger.info(f"AlloyDB database '{ALLOYDB_DATABASE}' does not exist yet; creating it via 'postgres'...")
-                admin_conn = _connect_alloydb(db_name="postgres", project_id=project_id)
-                try:
-                    admin_conn.autocommit = True
-                    cur = admin_conn.cursor()
-                    cur.execute(f'CREATE DATABASE "{ALLOYDB_DATABASE}"')
-                    cur.close()
-                    logger.info(f"Created AlloyDB database '{ALLOYDB_DATABASE}' in cluster '{ALLOYDB_CLUSTER}'.")
-                finally:
-                    admin_conn.close()
-                conn = _connect_alloydb(db_name=ALLOYDB_DATABASE, project_id=project_id)
-            else:
-                raise
+        client = bigquery.Client(project=target_project)
+        dataset_ref = f"{target_project}.{DATASET_ID}"
+        dataset = bigquery.Dataset(dataset_ref)
+        dataset.location = DATASET_LOCATION
+        client.create_dataset(dataset, exists_ok=True)
 
-        try:
-            conn.autocommit = True
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {TABLE_ID} (
-                    customer_id BIGINT NOT NULL,
-                    customer_name TEXT NOT NULL,
-                    rating INTEGER NOT NULL,
-                    description TEXT NOT NULL,
-                    timestamp TIMESTAMPTZ
-                )
-                """
-            )
-            try:
-                cur.execute(f"GRANT ALL PRIVILEGES ON SCHEMA public TO PUBLIC")
-                cur.execute(f"GRANT ALL PRIVILEGES ON TABLE {TABLE_ID} TO PUBLIC")
-            except Exception:
-                pass
-            cur.close()
-            _ALLOYDB_TABLE_VERIFIED = True
-            logger.info(
-                f"AlloyDB table '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}' verified."
-            )
-        finally:
-            conn.close()
+        table_ref = f"{target_project}.{DATASET_ID}.{TABLE_ID}"
+        schema = [
+            bigquery.SchemaField("customer_id", "INTEGER", mode="NULLABLE"),
+            bigquery.SchemaField("customer_name", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("description", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("rating", "INTEGER", mode="NULLABLE"),
+            bigquery.SchemaField("timestamp", "DATETIME", mode="NULLABLE"),
+        ]
+        table = bigquery.Table(table_ref, schema=schema)
+        client.create_table(table, exists_ok=True)
+        _BQ_TABLE_VERIFIED = True
+        logger.info(f"BigQuery table '{table_ref}' verified.")
     except Exception as e:
         logger.warning(
-            f"Could not verify/create AlloyDB table '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}': {e}. "
+            f"Could not verify/create BigQuery table '{target_project}.{DATASET_ID}.{TABLE_ID}': {e}. "
             "Will retry on rating write."
         )
 
 
-# Backward-compatible alias
-ensure_bigquery_ratings_table = ensure_alloydb_ratings_table
-
-# Ensure database and table exist on startup
-ensure_alloydb_ratings_table(PROJECT_ID)
+# Ensure dataset and table exist on startup (gracefully no-ops offline)
+ensure_bigquery_ratings_table(PROJECT_ID)
 
 
-def write_customer_rating_to_alloydb(
+def write_customer_rating_to_bigquery(
     customer_id: int,
     customer_name: str,
     rating: int,
     description: str,
     timestamp: Optional[str] = None,
     project_id: str = PROJECT_ID,
-) -> bool:
-    """Inserts a customer evaluation row with timestamp into AlloyDB table customer_ratings in database apex."""
-    global _ALLOYDB_TABLE_VERIFIED
-    safe_rating = max(1, min(5, int(rating)))
-    if timestamp:
-        try:
-            now_dt = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except Exception:
-            now_dt = datetime.datetime.now(datetime.timezone.utc)
-    else:
-        now_dt = datetime.datetime.now(datetime.timezone.utc)
-    now_ts = now_dt.isoformat()
-
-    row = {
-        "customer_id": int(customer_id),
-        "customer_name": str(customer_name),
-        "rating": safe_rating,
-        "description": str(description),
-        "timestamp": now_ts,
-    }
+) -> Dict[str, Any]:
+    """Inserts a customer evaluation row into BigQuery table `{project_id}.demo.customer_ratings`."""
+    target_project = (project_id or PROJECT_ID or "").strip()
+    table_ref = f"{target_project}.{DATASET_ID}.{TABLE_ID}" if target_project else f"{DATASET_ID}.{TABLE_ID}"
 
     try:
-        if not _ALLOYDB_TABLE_VERIFIED:
-            ensure_alloydb_ratings_table(project_id)
+        safe_customer_id = int(customer_id)
+        safe_rating = max(1, min(5, int(rating)))
+    except (ValueError, TypeError) as val_err:
+        logger.warning(f"Invalid rating payload for BigQuery write: {val_err}")
+        return {
+            "status": "error",
+            "destination": "bigquery",
+            "table": table_ref,
+            "error": f"Invalid numeric field: {val_err}",
+        }
 
-        conn = _connect_alloydb(db_name=ALLOYDB_DATABASE, project_id=project_id)
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                INSERT INTO {TABLE_ID} (customer_id, customer_name, rating, description, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (
-                    int(customer_id),
-                    str(customer_name),
-                    safe_rating,
-                    str(description),
-                    now_dt,
-                ),
+    normalized_ts = _normalize_bq_datetime(timestamp)
+    row = {
+        "customer_id": safe_customer_id,
+        "customer_name": str(customer_name),
+        "description": str(description),
+        "rating": safe_rating,
+        "timestamp": normalized_ts,
+    }
+
+    if not target_project:
+        err_msg = "No GCP project ID configured for BigQuery write."
+        logger.warning(f"Could not write rating to BigQuery '{table_ref}': {err_msg}")
+        return {
+            "status": "error",
+            "destination": "bigquery",
+            "table": table_ref,
+            "error": err_msg,
+        }
+
+    try:
+        if not _BQ_TABLE_VERIFIED:
+            ensure_bigquery_ratings_table(target_project)
+
+        client = bigquery.Client(project=target_project)
+        errors = client.insert_rows_json(table_ref, [row])
+        if errors:
+            logger.warning(
+                f"BigQuery insert errors for '{table_ref}': {errors}. Data: {row}"
             )
-            conn.commit()
-            cur.close()
-            logger.info(
-                f"Persisted rating ({safe_rating}/5) for {customer_name} at {now_ts} "
-                f"to AlloyDB {ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}."
-            )
-            return True
-        finally:
-            conn.close()
+            return {
+                "status": "error",
+                "destination": "bigquery",
+                "table": table_ref,
+                "error": str(errors),
+                "errors": errors,
+            }
+
+        logger.info(
+            f"Persisted rating ({safe_rating}/5) for {row['customer_name']} at {normalized_ts} "
+            f"to BigQuery {table_ref}."
+        )
+        return {
+            "status": "success",
+            "destination": "bigquery",
+            "table": table_ref,
+            "row": row,
+        }
     except Exception as e:
         logger.warning(
-            f"Could not write rating to AlloyDB '{ALLOYDB_CLUSTER}/{ALLOYDB_DATABASE}.{TABLE_ID}': {e}. "
-            f"Data: {row}"
+            f"Could not write rating to BigQuery '{table_ref}': {e}. Data: {row}"
         )
-        return False
-
-
-# Backward-compatible alias for legacy callers
-write_customer_rating_to_bigquery = write_customer_rating_to_alloydb
+        return {
+            "status": "error",
+            "destination": "bigquery",
+            "table": table_ref,
+            "error": str(e),
+        }
 
 
 # =====================================================================
@@ -840,7 +771,7 @@ root_agent = Agent(
         "Simulated Customer Agent for consumer electronics and home appliances. "
         "Generates novel, live customer personas and issues dynamically on every conversation trigger, "
         "simulates realistic multi-turn human pushback and dialogues, and evaluates experiences "
-        "with authentic feedback persisted to AlloyDB (cluster 'apex', database 'apex', table 'customer_ratings')."
+        "with authentic feedback persisted to BigQuery (dataset 'demo', table 'customer_ratings')."
     ),
     model="gemini-3.8-flash",
     generate_content_config=types.GenerateContentConfig(
@@ -853,13 +784,14 @@ root_agent = Agent(
         "delays an investigation, or asks you to perform tedious troubleshooting, express pushback "
         "and frustration according to your patience level. Do not easily surrender or settle on turn 1. "
         "Engage in a realistic multi-turn dialogue. Never say you are an AI or simulator. "
-        "You also provide live dynamic persona generation and post-conversation rating evaluations."
+        "You also provide live dynamic persona generation and post-conversation rating evaluations "
+        "persisted to BigQuery demo.customer_ratings."
     ),
     tools=[
         generate_customer_persona,
         generate_customer_turn,
         evaluate_customer_experience,
-        write_customer_rating_to_alloydb,
+        write_customer_rating_to_bigquery,
     ],
 )
 

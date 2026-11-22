@@ -95,30 +95,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def _network_attachment_exists(project: str, region: str, attachment_name: str = "agent-engine-psc-na") -> bool:
-    try:
-        res = subprocess.run(
-            [
-                "gcloud",
-                "compute",
-                "network-attachments",
-                "describe",
-                attachment_name,
-                f"--region={region}",
-                f"--project={project}",
-                "--quiet",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return res.returncode == 0
-    except Exception:
-        return False
-
-
-def _ensure_psc_service_agent_iam(project: str) -> None:
-    """Ensures Vertex AI service agents exist and have network/DNS/AlloyDB roles required for PSC attachment."""
+def _ensure_service_agent_iam(project: str) -> None:
+    """Ensures Vertex AI service agents exist and have BigQuery/Secret Manager/Vertex AI roles."""
     try:
         res = subprocess.run(
             ["gcloud", "projects", "describe", project, "--format=value(projectNumber)"],
@@ -146,7 +124,6 @@ def _ensure_psc_service_agent_iam(project: str) -> None:
             check=False,
         )
 
-        # Check if roles/compute.networkAdmin is already granted to the Vertex AI service agent
         aip_sa = f"service-{project_number}@gcp-sa-aiplatform.iam.gserviceaccount.com"
         re_sa = f"service-{project_number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
         policy_res = subprocess.run(
@@ -165,15 +142,7 @@ def _ensure_psc_service_agent_iam(project: str) -> None:
                 pass
 
         required_pairs = [
-            (aip_sa, "roles/compute.networkAdmin"),
-            (aip_sa, "roles/dns.peer"),
-            (aip_sa, "roles/alloydb.client"),
-            (aip_sa, "roles/alloydb.databaseUser"),
             (aip_sa, "roles/serviceusage.serviceUsageConsumer"),
-            (re_sa, "roles/compute.networkAdmin"),
-            (re_sa, "roles/dns.peer"),
-            (re_sa, "roles/alloydb.client"),
-            (re_sa, "roles/alloydb.databaseUser"),
             (re_sa, "roles/serviceusage.serviceUsageConsumer"),
             (re_sa, "roles/bigquery.dataEditor"),
             (re_sa, "roles/bigquery.jobUser"),
@@ -205,10 +174,10 @@ def _ensure_psc_service_agent_iam(project: str) -> None:
                 added_any = True
 
         if added_any:
-            print("[INFO] Applied Vertex AI service agent IAM roles for PSC network attachment; waiting 15s for IAM propagation...")
+            print("[INFO] Applied Vertex AI service agent IAM roles; waiting 15s for IAM propagation...")
             time.sleep(15)
     except Exception as e:
-        print(f"[WARN] Could not auto-verify PSC IAM bindings: {e}", file=sys.stderr)
+        print(f"[WARN] Could not auto-verify service agent IAM bindings: {e}", file=sys.stderr)
 
 
 def find_existing_agent_engine_id(project: str, region: str, display_name: str) -> Optional[str]:
@@ -249,24 +218,13 @@ def find_existing_agent_engine_id(project: str, region: str, display_name: str) 
     return None
 
 
-def _write_agent_engine_config(config_path: str, target_project: str, region: str, include_psc: bool) -> None:
+def _write_agent_engine_config(config_path: str) -> None:
     cfg = {
         "env_vars": {
             "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
             "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
         }
     }
-    if include_psc:
-        cfg["psc_interface_config"] = {
-            "network_attachment": "agent-engine-psc-na",
-            "dns_peering_configs": [
-                {
-                    "domain": f"{region}.alloydb-psc.goog.",
-                    "target_project": target_project,
-                    "target_network": "default",
-                }
-            ],
-        }
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
         f.write("\n")
@@ -293,17 +251,10 @@ def main():
     agent_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(agent_dir, ".agent_engine_config.json")
 
-    has_psc = args.dry_run or _network_attachment_exists(args.project, args.region, "agent-engine-psc-na")
     if not args.dry_run:
-        if has_psc:
-            _ensure_psc_service_agent_iam(args.project)
-        else:
-            print(
-                f"[INFO] Network attachment 'agent-engine-psc-na' not found in {args.project}/{args.region}; "
-                "omitting psc_interface_config from .agent_engine_config.json."
-            )
+        _ensure_service_agent_iam(args.project)
         try:
-            _write_agent_engine_config(config_path, args.project, args.region, include_psc=has_psc)
+            _write_agent_engine_config(config_path)
         except Exception as e:
             print(f"Warning: Could not update {config_path}: {e}", file=sys.stderr)
 
@@ -331,34 +282,26 @@ def main():
         return 0
 
     max_attempts = 3
-    try:
-        for attempt in range(1, max_attempts + 1):
-            try:
-                result = subprocess.run(cmd, input="n\n", text=True, check=True)
-                print("Customer Simulator Agent deployed successfully to Vertex AI Agent Engine.")
-                return result.returncode
-            except subprocess.CalledProcessError as e:
-                if attempt < max_attempts:
-                    print(
-                        f"[WARN] Deployment attempt {attempt}/{max_attempts} failed (exit code {e.returncode}). "
-                        "Waiting 20s for IAM/PSC propagation before retrying...",
-                        file=sys.stderr,
-                    )
-                    if has_psc:
-                        _ensure_psc_service_agent_iam(args.project)
-                    time.sleep(20)
-                else:
-                    print(f"Deployment failed with exit code {e.returncode}.", file=sys.stderr)
-                    return e.returncode
-            except FileNotFoundError:
-                print(f"Error: ADK CLI '{adk_bin}' not found.", file=sys.stderr)
-                return 1
-    finally:
-        # Restore project-agnostic placeholder in .agent_engine_config.json on disk
+    for attempt in range(1, max_attempts + 1):
         try:
-            _write_agent_engine_config(config_path, "", args.region, include_psc=True)
-        except Exception:
-            pass
+            result = subprocess.run(cmd, input="n\n", text=True, check=True)
+            print("Customer Simulator Agent deployed successfully to Vertex AI Agent Engine.")
+            return result.returncode
+        except subprocess.CalledProcessError as e:
+            if attempt < max_attempts:
+                print(
+                    f"[WARN] Deployment attempt {attempt}/{max_attempts} failed (exit code {e.returncode}). "
+                    "Waiting 20s for IAM propagation before retrying...",
+                    file=sys.stderr,
+                )
+                _ensure_service_agent_iam(args.project)
+                time.sleep(20)
+            else:
+                print(f"Deployment failed with exit code {e.returncode}.", file=sys.stderr)
+                return e.returncode
+        except FileNotFoundError:
+            print(f"Error: ADK CLI '{adk_bin}' not found.", file=sys.stderr)
+            return 1
     return 1
 
 
